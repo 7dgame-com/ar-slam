@@ -1,0 +1,12 @@
+/// <reference types="vite/client" />
+declare module '*.vue' {
+  import type { DefineComponent } from 'vue'
+  const component: DefineComponent<{}, {}, any>
+  export default component
+}
+
+declare const __APP_VERSION__: string
+
+interface Window {
+  __EARLY_INIT_PAYLOAD__: { token: string; config: Record<string, unknown> } | null
+}

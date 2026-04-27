@@ -1,0 +1,28 @@
+{
+  "id": "ar-slam-localization",
+  "schemaVersion": "1",
+  "nameI18n": {
+    "zh-CN": "AR SLAM 定位",
+    "zh-TW": "AR SLAM 定位",
+    "en-US": "AR SLAM Localization",
+    "ja-JP": "AR SLAM ローカライズ",
+    "th-TH": "AR SLAM Localization"
+  },
+  "descriptionI18n": {
+    "zh-CN": "上传空间扫描包，预览 GLB 模型，并创建场景绑定草稿",
+    "zh-TW": "上傳空間掃描包、預覽 GLB 模型，並建立場景綁定草稿",
+    "en-US": "Upload scan packages, preview GLB models, and create scene binding drafts",
+    "ja-JP": "スキャンパッケージをアップロードし、GLB モデルをプレビューしてシーン紐付け草案を作成します",
+    "th-TH": "อัปโหลดแพ็กเกจสแกน ดูตัวอย่างโมเดล GLB และสร้างฉบับร่างการผูกฉาก"
+  },
+  "group": {
+    "id": "ar",
+    "nameI18n": {
+      "zh-CN": "AR 工具",
+      "zh-TW": "AR 工具",
+      "en-US": "AR Tools",
+      "ja-JP": "AR ツール",
+      "th-TH": "เครื่องมือ AR"
+    }
+  }
+}
