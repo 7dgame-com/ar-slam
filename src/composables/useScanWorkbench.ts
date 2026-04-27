@@ -71,7 +71,11 @@ export function useScanWorkbench() {
   }
 
   function createBindingResult(uploadedPackage: UploadedScanPackage): BindingResult | null {
-    if (!canSubmitBinding.value) {
+    if (selectedScenes.value.length === 0 || selectedHasUnavailableScene.value) {
+      return null
+    }
+
+    if (parsedPackage.value && !canSubmitBinding.value) {
       return null
     }
 
@@ -99,6 +103,7 @@ export function useScanWorkbench() {
     selectedSceneIds,
     selectedScenes,
     sortedScenes,
+    selectedHasUnavailableScene,
     bindingResult,
     canSubmitBinding,
     setScenes,

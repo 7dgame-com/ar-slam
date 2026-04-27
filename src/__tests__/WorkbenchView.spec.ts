@@ -9,6 +9,8 @@ const parserMock = vi.hoisted(() => ({
 }))
 const apiMock = vi.hoisted(() => ({
   fetchVerseScenes: vi.fn(),
+  fetchExistingSpaces: vi.fn(),
+  deleteSpaceRecord: vi.fn(),
   fetchSceneBindings: vi.fn(),
   createSceneBindings: vi.fn(),
   deleteSceneBinding: vi.fn(),
@@ -23,6 +25,8 @@ vi.mock('../domain/scanPackageParser', () => ({
 
 vi.mock('../api', () => ({
   fetchVerseScenes: apiMock.fetchVerseScenes,
+  fetchExistingSpaces: apiMock.fetchExistingSpaces,
+  deleteSpaceRecord: apiMock.deleteSpaceRecord,
   fetchSceneBindings: apiMock.fetchSceneBindings,
   createSceneBindings: apiMock.createSceneBindings,
   deleteSceneBinding: apiMock.deleteSceneBinding,
@@ -34,6 +38,7 @@ vi.mock('../services/mainResourceUpload', () => ({
 
 vi.mock('../components/GlbPreview.vue', () => ({
   default: {
+    emits: ['modelLoaded'],
     props: ['modelUrl', 'modelName'],
     setup(_props: unknown, { expose }: { expose: (exposed: Record<string, unknown>) => void }) {
       expose({
@@ -41,7 +46,7 @@ vi.mock('../components/GlbPreview.vue', () => ({
       })
       return {}
     },
-    template: '<div data-test="glb-preview">{{ modelName }}</div>',
+    template: '<button type="button" data-test="glb-preview" :data-model-url="modelUrl || ``" @click="$emit(`modelLoaded`)">{{ modelName }}</button>',
   },
 }))
 
@@ -52,6 +57,7 @@ function parsedPackage(overrides: Partial<ParsedScanPackage> = {}): ParsedScanPa
 
   return {
     id: `pkg-${zipName}`,
+    zipMd5: `pkg-${zipName}`,
     zipName,
     provider: 'immersal',
     files: [
@@ -126,6 +132,8 @@ describe('WorkbenchView', () => {
   beforeEach(() => {
     parserMock.parseScanPackage.mockReset()
     apiMock.fetchVerseScenes.mockReset()
+    apiMock.fetchExistingSpaces.mockReset()
+    apiMock.deleteSpaceRecord.mockReset()
     apiMock.fetchSceneBindings.mockReset()
     apiMock.createSceneBindings.mockReset()
     apiMock.deleteSceneBinding.mockReset()
@@ -147,6 +155,20 @@ describe('WorkbenchView', () => {
       ],
       pagination: { page: 1, perPage: 10, pageCount: 2, totalCount: 12 },
     })
+    apiMock.fetchExistingSpaces.mockResolvedValue([{
+      spaceId: 801,
+      spaceName: 'A 馆定位包',
+      zipMd5: 'zip-md5-a',
+      cosPrefix: 'spaces/zip-md5-a',
+      modelFileId: 31,
+      thumbnailFileId: 33,
+      localizationFileIds: [32],
+      provider: 'immersal',
+      thumbnailUrl: 'https://cdn.example.com/spaces/a.png',
+      modelUrl: 'https://cdn.example.com/spaces/space-a.glb',
+      modelName: 'space-a.glb',
+    }])
+    apiMock.deleteSpaceRecord.mockResolvedValue('')
     apiMock.fetchSceneBindings.mockResolvedValue([])
     apiMock.deleteSceneBinding.mockResolvedValue({ code: 0 })
     apiMock.createSceneBindings.mockResolvedValue({
@@ -156,8 +178,8 @@ describe('WorkbenchView', () => {
     uploadMock.uploadScanPackageToMain.mockResolvedValue({
       spaceId: 701,
       spaceName: 'room.zip',
-      cosPrefix: 'ar-slam-localization/pkg-room.zip',
-      runtimeFileId: 14,
+      zipMd5: 'pkg-room-md5',
+      cosPrefix: 'spaces/pkg-room-md5',
       modelFileId: 11,
       thumbnailFileId: 13,
       localizationFileIds: [12],
@@ -165,7 +187,7 @@ describe('WorkbenchView', () => {
     Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
   })
 
-  it('shows backend scenes, uploads the package, creates a space, and binds multiple scenes', async () => {
+  it('shows backend scenes, uploads the package after GLB preview load, creates a space, and binds multiple scenes', async () => {
     parserMock.parseScanPackage.mockResolvedValue(parsedPackage())
     const wrapper = mountWorkbench()
     const input = wrapper.find('input[type="file"]')
@@ -184,17 +206,23 @@ describe('WorkbenchView', () => {
     expect(wrapper.text()).toContain('room.glb')
     expect(wrapper.text()).toContain('map.bytes')
 
+    await wrapper.find('[data-test="glb-preview"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(uploadMock.uploadScanPackageToMain).toHaveBeenCalledTimes(1)
+    expect(uploadMock.uploadScanPackageToMain).toHaveBeenCalledWith(expect.objectContaining({
+      sourceFile: file,
+      parsedPackage: expect.objectContaining({ zipName: 'room.zip' }),
+      thumbnailBlob: expect.any(Blob),
+    }))
+
     await wrapper.find('[data-test="scene-101"]').trigger('click')
     await wrapper.find('[data-test="scene-102"]').trigger('click')
     expect(wrapper.find('[data-test="upload-bind"]').text()).toBe('Bind')
     await wrapper.find('[data-test="upload-bind"]').trigger('click')
     await flushAsync(wrapper)
 
-    expect(uploadMock.uploadScanPackageToMain).toHaveBeenCalledWith(expect.objectContaining({
-      sourceFile: file,
-      parsedPackage: expect.objectContaining({ zipName: 'room.zip' }),
-      thumbnailBlob: expect.any(Blob),
-    }))
+    expect(uploadMock.uploadScanPackageToMain).toHaveBeenCalledTimes(1)
     expect(apiMock.createSceneBindings).toHaveBeenCalledWith({
       spaceId: 701,
       verseIds: ['101', '102'],
@@ -203,12 +231,167 @@ describe('WorkbenchView', () => {
     expect(wrapper.text()).toContain('"spaceId": 701')
   })
 
+  it('lists reusable spaces and binds selected scenes with a previous space without uploading again', async () => {
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+
+    expect(apiMock.fetchExistingSpaces).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('A 馆定位包')
+    expect(wrapper.text()).toContain('zip-md5-a')
+    expect(wrapper.find('[data-test="space-thumbnail-801"]').attributes('src')).toBe('https://cdn.example.com/spaces/a.png')
+
+    await wrapper.find('[data-test="space-801"]').trigger('click')
+    expect(wrapper.find('[data-test="glb-preview"]').attributes('data-model-url')).toBe('https://cdn.example.com/spaces/space-a.glb')
+    expect(wrapper.text()).toContain('space-a.glb')
+
+    await wrapper.find('[data-test="scene-101"]').trigger('click')
+
+    expect(wrapper.find('[data-test="upload-bind"]').attributes('disabled')).toBeUndefined()
+    await wrapper.find('[data-test="upload-bind"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(uploadMock.uploadScanPackageToMain).not.toHaveBeenCalled()
+    expect(apiMock.createSceneBindings).toHaveBeenCalledWith({
+      spaceId: 801,
+      verseIds: ['101'],
+    })
+    expect(wrapper.text()).toContain('Binding Result')
+    expect(wrapper.text()).toContain('"spaceId": 801')
+  })
+
+  it('confirms deletion inline and clears the preview and binding target', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(false)
+    apiMock.fetchExistingSpaces
+      .mockResolvedValueOnce([{
+        spaceId: 801,
+        spaceName: 'A 馆定位包',
+        zipMd5: 'zip-md5-a',
+        cosPrefix: 'spaces/zip-md5-a',
+        modelFileId: 31,
+        thumbnailFileId: 33,
+        localizationFileIds: [32],
+        provider: 'immersal',
+        thumbnailUrl: 'https://cdn.example.com/spaces/a.png',
+        modelUrl: 'https://cdn.example.com/spaces/space-a.glb',
+        modelName: 'space-a.glb',
+      }])
+      .mockResolvedValueOnce([])
+    apiMock.fetchSceneBindings
+      .mockResolvedValueOnce([{ sceneId: '101', spaceId: '801', spaceName: 'A 馆定位包' }])
+      .mockResolvedValueOnce([])
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+    await wrapper.find('[data-test="space-801"]').trigger('click')
+    expect(wrapper.find('[data-test="glb-preview"]').attributes('data-model-url')).toBe('https://cdn.example.com/spaces/space-a.glb')
+    expect(wrapper.find('[data-test="scene-101"]').attributes('aria-disabled')).toBe('true')
+    expect(wrapper.find('[data-test="unbind-101"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="delete-space-801"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(confirmSpy).not.toHaveBeenCalled()
+    expect(apiMock.deleteSpaceRecord).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-test="confirm-delete-space-801"]').exists()).toBe(true)
+
+    await wrapper.find('[data-test="confirm-delete-space-801"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(apiMock.deleteSpaceRecord).toHaveBeenCalledWith(801)
+    expect(wrapper.find('[data-test="space-801"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="glb-preview"]').attributes('data-model-url')).toBe('')
+    expect(wrapper.find('[data-test="scene-101"]').attributes('aria-disabled')).toBe('false')
+    expect(wrapper.find('[data-test="unbind-101"]').exists()).toBe(false)
+
+    await wrapper.find('[data-test="scene-101"]').trigger('click')
+    expect(wrapper.find('[data-test="upload-bind"]').attributes('disabled')).toBeDefined()
+
+    confirmSpy.mockRestore()
+  })
+
+  it('uses an existing space and skips upload when a dropped ZIP has already been uploaded', async () => {
+    parserMock.parseScanPackage.mockResolvedValue(parsedPackage({
+      zipName: 'same-room.zip',
+      zipMd5: 'zip-md5-a',
+    }))
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+    await uploadFile(wrapper, 'same-room.zip')
+
+    expect(apiMock.fetchExistingSpaces).toHaveBeenCalledTimes(2)
+    expect(wrapper.text()).toContain('already exists')
+    expect(wrapper.text()).toContain('A 馆定位包')
+    expect(wrapper.find('[data-test="glb-preview"]').attributes('data-model-url')).toBe('https://cdn.example.com/spaces/space-a.glb')
+
+    await wrapper.find('[data-test="glb-preview"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(uploadMock.uploadScanPackageToMain).not.toHaveBeenCalled()
+  })
+
+  it('treats a second upload with the same zip md5 as duplicate without running upload again', async () => {
+    apiMock.fetchExistingSpaces.mockResolvedValue([])
+    parserMock.parseScanPackage.mockResolvedValue(parsedPackage({
+      zipName: 'room.zip',
+      zipMd5: 'pkg-room-md5',
+    }))
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+    await uploadFile(wrapper, 'room.zip')
+    await wrapper.find('[data-test="glb-preview"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(uploadMock.uploadScanPackageToMain).toHaveBeenCalledTimes(1)
+
+    await uploadFile(wrapper, 'room.zip')
+
+    expect(wrapper.text()).toContain('already exists')
+    await wrapper.find('[data-test="glb-preview"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(uploadMock.uploadScanPackageToMain).toHaveBeenCalledTimes(1)
+    expect(wrapper.text()).toContain('room.zip')
+  })
+
+  it('does not upload a stale parsed package while a replacement ZIP is still parsing', async () => {
+    const replacementParse = deferred<ParsedScanPackage>()
+    parserMock.parseScanPackage
+      .mockResolvedValueOnce(parsedPackage({
+        zipName: 'first-room.zip',
+        zipMd5: 'first-md5',
+      }))
+      .mockReturnValueOnce(replacementParse.promise)
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+    await uploadFile(wrapper, 'first-room.zip')
+    expect(wrapper.text()).toContain('first-room.zip')
+
+    await uploadFile(wrapper, 'same-room.zip')
+    await wrapper.find('[data-test="glb-preview"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(uploadMock.uploadScanPackageToMain).not.toHaveBeenCalled()
+
+    replacementParse.resolve(parsedPackage({
+      zipName: 'same-room.zip',
+      zipMd5: 'zip-md5-a',
+    }))
+    await flushAsync(wrapper)
+
+    expect(wrapper.text()).toContain('already exists')
+    expect(uploadMock.uploadScanPackageToMain).not.toHaveBeenCalled()
+  })
+
   it('shows upload progress while the main resource upload is running', async () => {
     const upload = deferred<{
       spaceId: number
       spaceName: string
+      zipMd5: string
       cosPrefix: string
-      runtimeFileId: number
       modelFileId: number
       thumbnailFileId: number
       localizationFileIds: number[]
@@ -222,8 +405,7 @@ describe('WorkbenchView', () => {
 
     await flushAsync(wrapper)
     await uploadFile(wrapper, 'room.zip')
-    await wrapper.find('[data-test="scene-101"]').trigger('click')
-    await wrapper.find('[data-test="upload-bind"]').trigger('click')
+    await wrapper.find('[data-test="glb-preview"]').trigger('click')
     await flushAsync(wrapper)
 
     expect(wrapper.text()).toContain('Uploading room/model.glb')
@@ -232,8 +414,8 @@ describe('WorkbenchView', () => {
     upload.resolve({
       spaceId: 701,
       spaceName: 'room.zip',
-      cosPrefix: 'ar-slam-localization/pkg-room.zip',
-      runtimeFileId: 14,
+      zipMd5: 'pkg-room-md5',
+      cosPrefix: 'spaces/pkg-room-md5',
       modelFileId: 11,
       thumbnailFileId: 13,
       localizationFileIds: [12],
@@ -303,6 +485,8 @@ describe('WorkbenchView', () => {
 
     await flushAsync(wrapper)
     await uploadFile(wrapper, 'room.zip')
+    await wrapper.find('[data-test="glb-preview"]').trigger('click')
+    await flushAsync(wrapper)
     await wrapper.find('[data-test="scene-101"]').trigger('click')
     await wrapper.find('[data-test="upload-bind"]').trigger('click')
     await flushAsync(wrapper)

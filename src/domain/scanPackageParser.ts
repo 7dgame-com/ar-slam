@@ -1,4 +1,5 @@
 import JSZip from 'jszip'
+import { blobMd5 } from '../utils/blobMd5'
 import { detectProvider } from './providerAdapters'
 import type { LocalizationProvider, ManifestSummary, ParsedScanPackage, ScanFileRef } from './scanTypes'
 
@@ -42,6 +43,7 @@ export async function parseScanPackage(
     throw new Error('Only .zip scan packages are supported.')
   }
 
+  const zipMd5 = await blobMd5(file)
   const zip = await JSZip.loadAsync(file)
   const entries = Object.values(zip.files).filter((entry) => !entry.dir)
   const files = entries.map((entry) => toFileRef(entry.name, 0))
@@ -71,7 +73,8 @@ export async function parseScanPackage(
   }
 
   return {
-    id: `${Date.now()}-${file.name}`,
+    id: zipMd5,
+    zipMd5,
     zipName: file.name,
     provider: detection.provider,
     files,

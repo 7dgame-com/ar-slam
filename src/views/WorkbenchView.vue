@@ -12,9 +12,20 @@
           :provider="provider"
           :parsed-package="parsedPackage"
           :parse-error="parseError"
+          :upload-notice="uploadNotice"
           :is-parsing="isParsing"
           @upload="handleUpload"
           @provider-change="handleProviderChange"
+        />
+        <ExistingSpacePanel
+          :spaces="existingSpaces"
+          :loading="spacesLoading"
+          :error="spacesError"
+          :selected-space-id="selectedSpaceId"
+          :deleting-space-id="deletingSpaceId"
+          @select-space="handleSelectExistingSpace"
+          @delete-space="handleDeleteExistingSpace"
+          @refresh="loadExistingSpaces"
         />
       </el-card>
 
@@ -22,8 +33,10 @@
         <template #header>3D preview</template>
         <GlbPreview
           ref="previewRef"
-          :model-url="parsedPackage?.modelBlobUrl || null"
-          :model-name="parsedPackage?.modelFile?.name || ''"
+          :model-url="previewModelUrl"
+          :model-name="previewModelName"
+          @model-loaded="handlePreviewModelLoaded"
+          @model-error="handlePreviewModelError"
         />
       </el-card>
 
@@ -37,7 +50,7 @@
           :error="scenesError"
           :search="sceneSearch"
           :sort="sceneSort"
-          :can-submit-binding="canSubmitBinding"
+          :can-submit-binding="canSubmitSceneBinding"
           :submitting="isSubmittingBinding"
           :unbinding-scene-id="unbindingSceneId"
           :upload-stage="uploadStage"
@@ -57,15 +70,29 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { createSceneBindings, deleteSceneBinding, fetchSceneBindings, fetchVerseScenes } from '../api'
+import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import {
+  createSceneBindings,
+  deleteSceneBinding,
+  deleteSpaceRecord,
+  fetchExistingSpaces,
+  fetchSceneBindings,
+  fetchVerseScenes,
+} from '../api'
+import ExistingSpacePanel from '../components/ExistingSpacePanel.vue'
 import GlbPreview from '../components/GlbPreview.vue'
 import ScanUploadPanel from '../components/ScanUploadPanel.vue'
 import SceneBindingPanel from '../components/SceneBindingPanel.vue'
 import { useScanWorkbench } from '../composables/useScanWorkbench'
 import { parseScanPackage } from '../domain/scanPackageParser'
 import { uploadScanPackageToMain } from '../services/mainResourceUpload'
-import type { LocalizationProvider, ScenePagination, SceneSort } from '../domain/scanTypes'
+import type {
+  ExistingSpaceOption,
+  LocalizationProvider,
+  ScenePagination,
+  SceneSort,
+  UploadedScanPackage,
+} from '../domain/scanTypes'
 
 interface GlbPreviewExpose {
   captureScreenshot: () => Promise<Blob | null>
@@ -75,10 +102,20 @@ const provider = ref<LocalizationProvider>('auto')
 const currentFile = ref<File | null>(null)
 const previewRef = ref<GlbPreviewExpose | null>(null)
 const parseError = ref('')
+const uploadNotice = ref('')
 const isParsing = ref(false)
 const isSubmittingBinding = ref(false)
+const isUploadingPackage = ref(false)
 const uploadStage = ref('')
 const uploadProgress = ref(0)
+const uploadedPackage = ref<UploadedScanPackage | null>(null)
+const existingSpaces = ref<ExistingSpaceOption[]>([])
+const localUploadedSpaces = ref<ExistingSpaceOption[]>([])
+const spacesLoading = ref(false)
+const spacesError = ref('')
+const selectedSpaceId = ref<number | null>(null)
+const selectedExistingSpace = ref<ExistingSpaceOption | null>(null)
+const deletingSpaceId = ref<number | null>(null)
 const scenesLoading = ref(false)
 const scenesError = ref('')
 const sceneSearch = ref('')
@@ -92,18 +129,159 @@ const scenePagination = ref<ScenePagination>({
 })
 let parseRequestId = 0
 let sceneRequestId = 0
+let uploadRequestId = 0
+let spacesRequestId = 0
 const {
   parsedPackage,
   selectedSceneIds,
+  selectedScenes,
   sortedScenes,
+  selectedHasUnavailableScene,
   bindingResult,
-  canSubmitBinding,
   setScenes,
   setParsedPackage,
   toggleSceneSelection,
   createBindingResult,
   dispose,
 } = useScanWorkbench()
+
+const canSubmitSceneBinding = computed(() => (
+  Boolean(uploadedPackage.value)
+  && selectedScenes.value.length > 0
+  && !selectedHasUnavailableScene.value
+  && !isUploadingPackage.value
+))
+
+const previewModelUrl = computed(() => (
+  selectedExistingSpace.value?.modelUrl
+  || parsedPackage.value?.modelBlobUrl
+  || null
+))
+
+const previewModelName = computed(() => (
+  selectedExistingSpace.value?.modelName
+  || selectedExistingSpace.value?.spaceName
+  || parsedPackage.value?.modelFile?.name
+  || ''
+))
+
+function existingSpaceKey(space: ExistingSpaceOption) {
+  return space.zipMd5 ? `zip:${space.zipMd5}` : `space:${space.spaceId}`
+}
+
+function mergeExistingSpaces(remoteSpaces: ExistingSpaceOption[], localSpaces = localUploadedSpaces.value) {
+  const seen = new Set<string>()
+  const merged: ExistingSpaceOption[] = []
+
+  for (const space of [...remoteSpaces, ...localSpaces]) {
+    const key = existingSpaceKey(space)
+    if (seen.has(key)) continue
+
+    seen.add(key)
+    merged.push(space)
+  }
+
+  return merged
+}
+
+function rememberUploadedSpace(result: UploadedScanPackage) {
+  const localSpace: ExistingSpaceOption = {
+    ...result,
+    ...(parsedPackage.value?.provider ? { provider: parsedPackage.value.provider } : {}),
+    ...(parsedPackage.value?.modelFile?.name ? { modelName: parsedPackage.value.modelFile.name } : {}),
+  }
+
+  localUploadedSpaces.value = mergeExistingSpaces([localSpace], localUploadedSpaces.value)
+  existingSpaces.value = mergeExistingSpaces(existingSpaces.value)
+}
+
+async function loadExistingSpaces(): Promise<ExistingSpaceOption[]> {
+  const requestId = ++spacesRequestId
+  spacesLoading.value = true
+  spacesError.value = ''
+
+  try {
+    const result = await fetchExistingSpaces()
+    if (requestId !== spacesRequestId) return existingSpaces.value
+    existingSpaces.value = mergeExistingSpaces(result)
+    return existingSpaces.value
+  } catch (error) {
+    if (requestId === spacesRequestId) {
+      existingSpaces.value = mergeExistingSpaces([])
+      spacesError.value = error instanceof Error && error.message
+        ? error.message
+        : 'Spaces could not be loaded.'
+    }
+    return existingSpaces.value
+  } finally {
+    if (requestId === spacesRequestId) {
+      spacesLoading.value = false
+    }
+  }
+}
+
+function handleSelectExistingSpace(space: ExistingSpaceOption, notice = '') {
+  uploadedPackage.value = {
+    spaceId: space.spaceId,
+    spaceName: space.spaceName,
+    zipMd5: space.zipMd5,
+    cosPrefix: space.cosPrefix,
+    modelFileId: space.modelFileId,
+    thumbnailFileId: space.thumbnailFileId,
+    localizationFileIds: [...space.localizationFileIds],
+  }
+  selectedSpaceId.value = space.spaceId
+  selectedExistingSpace.value = space
+  uploadRequestId += 1
+  isUploadingPackage.value = false
+  uploadStage.value = 'Using existing space'
+  uploadProgress.value = 100
+  uploadNotice.value = notice
+  scenesError.value = ''
+}
+
+function findExistingSpaceByZipMd5(zipMd5: string, spaces = existingSpaces.value) {
+  return spaces.find((space) => space.zipMd5 === zipMd5)
+}
+
+function clearSelectedSpace() {
+  currentFile.value = null
+  uploadedPackage.value = null
+  selectedSpaceId.value = null
+  selectedExistingSpace.value = null
+  uploadStage.value = ''
+  uploadProgress.value = 0
+  setParsedPackage(null)
+}
+
+async function handleDeleteExistingSpace(space: ExistingSpaceOption) {
+  if (deletingSpaceId.value) return
+
+  deletingSpaceId.value = space.spaceId
+  spacesError.value = ''
+  uploadNotice.value = ''
+
+  try {
+    await deleteSpaceRecord(space.spaceId)
+    const deletedKey = existingSpaceKey(space)
+    localUploadedSpaces.value = localUploadedSpaces.value.filter((item) => existingSpaceKey(item) !== deletedKey)
+    existingSpaces.value = existingSpaces.value.filter((item) => existingSpaceKey(item) !== deletedKey)
+
+    if (selectedSpaceId.value === space.spaceId) {
+      clearSelectedSpace()
+    }
+
+    uploadNotice.value = `Deleted space: ${space.spaceName}.`
+    await loadExistingSpaces()
+    await refreshScenes()
+  } catch (error) {
+    spacesError.value = error instanceof Error && error.message
+      ? error.message
+      : 'Space could not be deleted.'
+  } finally {
+    deletingSpaceId.value = null
+  }
+}
 
 async function loadScenes(page = scenePagination.value.page) {
   const requestId = ++sceneRequestId
@@ -180,39 +358,22 @@ async function handleUnbindScene(sceneId: string) {
 }
 
 async function handleSubmitBinding() {
-  if (!currentFile.value || !parsedPackage.value || !canSubmitBinding.value || isSubmittingBinding.value) {
+  if (!uploadedPackage.value || !canSubmitSceneBinding.value || isSubmittingBinding.value) {
     return
   }
 
   const verseIds = [...selectedSceneIds.value]
   scenesError.value = ''
-  uploadStage.value = 'Preparing thumbnail'
-  uploadProgress.value = 0
   isSubmittingBinding.value = true
 
   try {
-    const thumbnailBlob = await previewRef.value?.captureScreenshot()
-    if (!thumbnailBlob) {
-      throw new Error('Thumbnail could not be captured. Please wait for the 3D preview to finish loading.')
-    }
-
-    const uploadedPackage = await uploadScanPackageToMain({
-      sourceFile: currentFile.value,
-      parsedPackage: parsedPackage.value,
-      thumbnailBlob,
-      onProgress: (progress) => {
-        uploadStage.value = progress.stage
-        uploadProgress.value = Math.round(progress.percent)
-      },
-    })
-
     uploadStage.value = 'Binding scenes'
     uploadProgress.value = Math.max(uploadProgress.value, 95)
     await createSceneBindings({
-      spaceId: uploadedPackage.spaceId,
+      spaceId: uploadedPackage.value.spaceId,
       verseIds,
     })
-    createBindingResult(uploadedPackage)
+    createBindingResult(uploadedPackage.value)
     uploadStage.value = 'Binding complete'
     uploadProgress.value = 100
     await refreshScenes()
@@ -230,13 +391,83 @@ async function handleSubmitBinding() {
   }
 }
 
+async function uploadCurrentPackage() {
+  if (
+    !currentFile.value
+    || !parsedPackage.value
+    || isParsing.value
+    || isUploadingPackage.value
+    || uploadedPackage.value
+    || parsedPackage.value.errors.length > 0
+    || !parsedPackage.value.provider
+    || !parsedPackage.value.modelFile
+    || parsedPackage.value.localizationFiles.length === 0
+  ) {
+    return
+  }
+
+  const requestId = ++uploadRequestId
+  scenesError.value = ''
+  uploadStage.value = 'Preparing thumbnail'
+  uploadProgress.value = 0
+  isUploadingPackage.value = true
+
+  try {
+    const thumbnailBlob = await previewRef.value?.captureScreenshot()
+    if (!thumbnailBlob) {
+      throw new Error('Thumbnail could not be captured. Please wait for the 3D preview to finish loading.')
+    }
+
+    const result = await uploadScanPackageToMain({
+      sourceFile: currentFile.value,
+      parsedPackage: parsedPackage.value,
+      thumbnailBlob,
+      onProgress: (progress) => {
+        if (requestId !== uploadRequestId) return
+        uploadStage.value = progress.stage
+        uploadProgress.value = Math.round(progress.percent)
+      },
+    })
+
+    if (requestId !== uploadRequestId) return
+    uploadedPackage.value = result
+    selectedSpaceId.value = result.spaceId
+    selectedExistingSpace.value = null
+    uploadStage.value = 'Upload complete'
+    uploadProgress.value = 100
+    rememberUploadedSpace(result)
+    void loadExistingSpaces()
+  } catch (error) {
+    if (requestId !== uploadRequestId) return
+    scenesError.value = error instanceof Error && error.message
+      ? error.message
+      : 'Scan package could not be uploaded.'
+    uploadStage.value = ''
+    uploadProgress.value = 0
+  } finally {
+    if (requestId === uploadRequestId) {
+      isUploadingPackage.value = false
+    }
+  }
+}
+
+function handlePreviewModelLoaded() {
+  void uploadCurrentPackage()
+}
+
+function handlePreviewModelError(message: string) {
+  scenesError.value = message
+}
+
 async function parseCurrentFile(file: File) {
   const requestId = ++parseRequestId
   parseError.value = ''
+  uploadNotice.value = ''
   isParsing.value = true
 
   try {
     const parsed = await parseScanPackage(file, provider.value)
+    const spaces = await loadExistingSpaces()
     if (requestId !== parseRequestId) {
       if (parsed.modelBlobUrl) {
         URL.revokeObjectURL(parsed.modelBlobUrl)
@@ -245,6 +476,13 @@ async function parseCurrentFile(file: File) {
     }
 
     setParsedPackage(parsed)
+    const existingSpace = findExistingSpaceByZipMd5(parsed.zipMd5, spaces)
+    if (existingSpace) {
+      handleSelectExistingSpace(
+        existingSpace,
+        `This scan package already exists. Using existing space: ${existingSpace.spaceName}.`,
+      )
+    }
   } catch (error) {
     if (requestId === parseRequestId) {
       setParsedPackage(null)
@@ -261,14 +499,28 @@ async function parseCurrentFile(file: File) {
 
 async function handleUpload(file: File) {
   currentFile.value = file
+  setParsedPackage(null)
+  uploadedPackage.value = null
+  selectedSpaceId.value = null
+  selectedExistingSpace.value = null
+  uploadRequestId += 1
+  isUploadingPackage.value = false
   uploadStage.value = ''
   uploadProgress.value = 0
+  uploadNotice.value = ''
   await parseCurrentFile(file)
 }
 
 async function handleProviderChange(nextProvider: LocalizationProvider) {
   provider.value = nextProvider
   if (currentFile.value) {
+    setParsedPackage(null)
+    uploadedPackage.value = null
+    selectedSpaceId.value = null
+    selectedExistingSpace.value = null
+    uploadRequestId += 1
+    isUploadingPackage.value = false
+    uploadNotice.value = ''
     await parseCurrentFile(currentFile.value)
   }
 }
@@ -276,11 +528,14 @@ async function handleProviderChange(nextProvider: LocalizationProvider) {
 onBeforeUnmount(() => {
   parseRequestId += 1
   sceneRequestId += 1
+  uploadRequestId += 1
+  spacesRequestId += 1
   dispose()
 })
 
 onMounted(() => {
   void loadScenes(1)
+  void loadExistingSpaces()
 })
 </script>
 

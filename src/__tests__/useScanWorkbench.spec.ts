@@ -5,6 +5,7 @@ import type { ParsedScanPackage, SceneOption } from '../domain/scanTypes'
 function parsedPackage(overrides: Partial<ParsedScanPackage> = {}): ParsedScanPackage {
   return {
     id: 'pkg-1',
+    zipMd5: 'pkg-1',
     zipName: 'room.zip',
     provider: 'immersal',
     files: [],
@@ -54,8 +55,8 @@ describe('useScanWorkbench', () => {
     const result = workbench.createBindingResult({
       spaceId: 701,
       spaceName: 'room.zip',
-      cosPrefix: 'ar-slam-localization/pkg-1',
-      runtimeFileId: 14,
+      zipMd5: 'pkg-1',
+      cosPrefix: 'spaces/pkg-1',
       modelFileId: 11,
       thumbnailFileId: 13,
       localizationFileIds: [12],
@@ -96,11 +97,30 @@ describe('useScanWorkbench', () => {
     expect(workbench.createBindingResult({
       spaceId: 701,
       spaceName: 'room.zip',
-      cosPrefix: 'ar-slam-localization/pkg-1',
-      runtimeFileId: 14,
+      zipMd5: 'pkg-1',
+      cosPrefix: 'spaces/pkg-1',
       modelFileId: 11,
       thumbnailFileId: 13,
       localizationFileIds: [12],
     })).toBe(null)
+  })
+
+  it('can create a binding result from an existing uploaded space without a parsed package', () => {
+    const workbench = useScanWorkbench()
+    workbench.setScenes(scenes)
+    workbench.toggleSceneSelection('101')
+
+    const result = workbench.createBindingResult({
+      spaceId: 801,
+      spaceName: 'A 馆定位包',
+      zipMd5: 'zip-md5-a',
+      cosPrefix: 'spaces/zip-md5-a',
+      modelFileId: 31,
+      thumbnailFileId: 33,
+      localizationFileIds: [32],
+    })
+
+    expect(result?.spaceId).toBe(801)
+    expect(result?.scenes).toEqual([{ id: '101', name: '旗舰店展厅' }])
   })
 })

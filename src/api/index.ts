@@ -9,7 +9,13 @@ import {
   getRefreshToken,
   setRefreshToken
 } from '../utils/token'
-import type { CreateSceneBindingsPayload, SceneBindingRecord, SceneListResult, SceneOption } from '../domain/scanTypes'
+import type {
+  CreateSceneBindingsPayload,
+  ExistingSpaceOption,
+  SceneBindingRecord,
+  SceneListResult,
+  SceneOption,
+} from '../domain/scanTypes'
 
 /**
  * AR SLAM 定位插件业务 API 实例
@@ -256,6 +262,11 @@ export interface SpaceRecordResponse {
   image_id?: number
   file_id?: number
   data?: unknown
+  created_at?: string
+  createdAt?: string
+  image?: FileRecordResponse | null
+  mesh?: FileRecordResponse | null
+  file?: FileRecordResponse | null
 }
 
 export async function fetchCloudConfig(): Promise<MainCloudConfigResponse> {
@@ -272,6 +283,10 @@ export async function createFileRecord(payload: CreateFileRecordPayload): Promis
 
 export async function createSpaceRecord(payload: CreateSpacePayload): Promise<SpaceRecordResponse> {
   return mainApi.post<SpaceRecordResponse>('/spaces', payload).then((response) => response.data)
+}
+
+export async function deleteSpaceRecord(spaceId: number): Promise<unknown> {
+  return mainApi.delete(`/spaces/${encodeURIComponent(String(spaceId))}`).then((response) => response.data)
 }
 
 interface VerseSceneResponse {
@@ -299,6 +314,58 @@ function headerInt(headers: Record<string, unknown>, key: string, fallback: numb
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function toRecord(value: unknown): Record<string, unknown> {
+  if (typeof value === 'string' && value.trim()) {
+    try {
+      const parsed = JSON.parse(value) as unknown
+      return toRecord(parsed)
+    } catch {
+      return {}
+    }
+  }
+
+  if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
+    return value as Record<string, unknown>
+  }
+
+  return {}
+}
+
+function stringFrom(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value : undefined
+}
+
+function numberFrom(...values: unknown[]): number {
+  for (const value of values) {
+    const parsed = Number(value)
+    if (Number.isFinite(parsed) && parsed > 0) {
+      return parsed
+    }
+  }
+  return 0
+}
+
+function numberArrayFrom(value: unknown): number[] {
+  if (!Array.isArray(value)) return []
+
+  return value
+    .map((item) => Number(item))
+    .filter((item) => Number.isFinite(item) && item > 0)
+}
+
+function filenameFromUrl(value: string | undefined): string | undefined {
+  if (!value) return undefined
+
+  try {
+    const pathname = new URL(value).pathname
+    const filename = pathname.split('/').filter(Boolean).pop()
+    return filename ? decodeURIComponent(filename) : undefined
+  } catch {
+    const filename = value.split('?')[0].split('/').filter(Boolean).pop()
+    return filename || undefined
+  }
+}
+
 function toSceneOption(item: VerseSceneResponse): SceneOption {
   return {
     id: String(item.id),
@@ -306,6 +373,56 @@ function toSceneOption(item: VerseSceneResponse): SceneOption {
     description: item.description || item.info || undefined,
     thumbnailUrl: item.image?.url || item.thumbnailUrl || item.thumbnail_url || undefined,
   }
+}
+
+function toExistingSpaceOption(item: SpaceRecordResponse): ExistingSpaceOption | null {
+  const data = toRecord(item.data)
+  const spaceId = numberFrom(item.id)
+  if (!spaceId) return null
+
+  const zipMd5 = stringFrom(data.zipMd5) || ''
+  const cosPrefix = stringFrom(data.cosPrefix) || (zipMd5 ? `spaces/${zipMd5}` : '')
+  const localizationFileIds = numberArrayFrom(data.localizationFileIds)
+  const fallbackLocalizationFileId = numberFrom(data.primaryLocalizationFileId, item.file_id, item.file?.id)
+  const thumbnailUrl = stringFrom(item.image?.url)
+  const modelUrl = stringFrom(item.mesh?.url)
+  const modelName = stringFrom(item.mesh?.filename)
+    || stringFrom(data.modelName)
+    || stringFrom(data.modelFileName)
+    || filenameFromUrl(modelUrl)
+  const provider = stringFrom(data.provider)
+  const createdAt = stringFrom(item.created_at) || stringFrom(item.createdAt)
+
+  if (localizationFileIds.length === 0 && fallbackLocalizationFileId) {
+    localizationFileIds.push(fallbackLocalizationFileId)
+  }
+
+  return {
+    spaceId,
+    spaceName: item.name || `Space ${item.id}`,
+    zipMd5,
+    cosPrefix,
+    modelFileId: numberFrom(data.modelFileId, item.mesh_id, item.mesh?.id),
+    thumbnailFileId: numberFrom(data.thumbnailFileId, item.image_id, item.image?.id),
+    localizationFileIds,
+    ...(provider ? { provider } : {}),
+    ...(thumbnailUrl ? { thumbnailUrl } : {}),
+    ...(modelUrl ? { modelUrl } : {}),
+    ...(modelName ? { modelName } : {}),
+    ...(createdAt ? { createdAt } : {}),
+  }
+}
+
+function dedupeExistingSpaces(spaces: ExistingSpaceOption[]): ExistingSpaceOption[] {
+  const seen = new Set<string>()
+
+  return spaces.filter((space) => {
+    const key = space.zipMd5 ? `zip:${space.zipMd5}` : `space:${space.spaceId}`
+    if (seen.has(key)) return false
+
+    seen.add(key)
+    return true
+  })
 }
 
 export async function fetchVerseScenes(params: SceneListParams): Promise<SceneListResult> {
@@ -329,6 +446,22 @@ export async function fetchVerseScenes(params: SceneListParams): Promise<SceneLi
       totalCount: headerInt(response.headers, 'x-pagination-total-count', response.data.length),
     },
   }
+}
+
+export async function fetchExistingSpaces(page = 1, perPage = 20): Promise<ExistingSpaceOption[]> {
+  const response = await mainApi.get<SpaceRecordResponse[]>('/spaces', {
+    params: {
+      page,
+      'per-page': perPage,
+      expand: 'image,mesh,file',
+    },
+  })
+
+  const spaces = response.data
+    .map(toExistingSpaceOption)
+    .filter((item): item is ExistingSpaceOption => Boolean(item))
+
+  return dedupeExistingSpaces(spaces)
 }
 
 export async function fetchSceneBindings(sceneIds: string[]): Promise<SceneBindingRecord[]> {

@@ -1,8 +1,6 @@
 import JSZip from 'jszip'
 // @ts-ignore -- cos-js-sdk-v5 does not ship declarations in this project.
 import COS from 'cos-js-sdk-v5'
-// @ts-ignore -- spark-md5 declarations are provided by the package in the main app, but optional here.
-import SparkMD5 from 'spark-md5'
 import {
   createFileRecord,
   createSpaceRecord,
@@ -18,6 +16,7 @@ import type {
   ScanFileRole,
   UploadedScanPackage,
 } from '../domain/scanTypes'
+import { blobMd5 } from '../utils/blobMd5'
 
 export interface UploadProgressState {
   stage: string
@@ -39,15 +38,19 @@ interface CosHandler {
 
 interface UploadCandidate {
   path: string
+  originalName?: string
   filename: string
   role: ScanFileRole
   key: string
   blob: Blob
   mimeType: string
+  md5?: string
 }
 
 interface UploadedFileMapping {
   path: string
+  originalName?: string
+  filename: string
   role: ScanFileRole
   fileId: number
   key: string
@@ -119,11 +122,6 @@ function safePathPart(value: string): string {
     .replace(/[?#]/g, '_')
 }
 
-function safePackageId(value: string): string {
-  const cleaned = safePathPart(value).replace(/[^a-zA-Z0-9._/-]+/g, '-')
-  return cleaned || `pkg-${Date.now()}`
-}
-
 function contentTypeFor(filename: string, fallback = 'application/octet-stream') {
   const lower = filename.toLowerCase()
   if (lower.endsWith('.glb')) return 'model/gltf-binary'
@@ -145,30 +143,6 @@ function objectUrl(bucket: string, region: string, key: string, location?: strin
     .map((part) => encodeURIComponent(part))
     .join('/')
   return `https://${bucket}.cos.${region}.myqcloud.com/${encodedKey}`
-}
-
-async function blobMd5(blob: Blob): Promise<string> {
-  const spark = new SparkMD5.ArrayBuffer()
-  const chunkSize = 2 * 1024 * 1024
-
-  for (let offset = 0; offset < blob.size; offset += chunkSize) {
-    spark.append(await blobToArrayBuffer(blob.slice(offset, offset + chunkSize)))
-  }
-
-  return spark.end()
-}
-
-async function blobToArrayBuffer(blob: Blob): Promise<ArrayBuffer> {
-  if (typeof blob.arrayBuffer === 'function') {
-    return blob.arrayBuffer()
-  }
-
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader()
-    reader.onload = () => resolve(reader.result as ArrayBuffer)
-    reader.onerror = () => reject(reader.error ?? new Error('Blob could not be read.'))
-    reader.readAsArrayBuffer(blob)
-  })
 }
 
 async function objectExists(handler: CosHandler, key: string): Promise<boolean> {
@@ -234,9 +208,10 @@ function uniqueFileRefs(files: ScanFileRef[]): ScanFileRef[] {
   return Array.from(new Map(files.map((file) => [file.path, file])).values())
 }
 
-function shouldExcludeFromRuntimePackage(fileRef: ScanFileRef): boolean {
-  const extension = fileRef.extension.toLowerCase()
-  return fileRef.role === 'model' || extension === 'glb' || extension === 'gltf'
+function extensionSuffix(filename: string): string {
+  const cleanName = filename.split(/[?#]/)[0] || filename
+  const dot = cleanName.lastIndexOf('.')
+  return dot >= 0 ? cleanName.slice(dot).toLowerCase() : ''
 }
 
 async function buildZipCandidates(
@@ -254,52 +229,21 @@ async function buildZipCandidates(
     }
 
     const blob = await entry.async('blob')
+    const md5 = await blobMd5(blob)
+    const filename = `${md5}${extensionSuffix(fileRef.name)}`
     candidates.push({
       path: safePath,
-      filename: fileRef.name,
+      originalName: fileRef.name,
+      filename,
       role: fileRef.role,
-      key: `${cosPrefix}/${safePath}`,
+      key: `${cosPrefix}/${filename}`,
       blob,
       mimeType: contentTypeFor(fileRef.name),
+      md5,
     })
   }
 
   return candidates
-}
-
-async function buildRuntimeZipCandidate(
-  zip: JSZip,
-  parsedPackage: ParsedScanPackage,
-  cosPrefix: string,
-  packageId: string,
-): Promise<UploadCandidate> {
-  const runtimeZip = new JSZip()
-
-  for (const fileRef of uniqueFileRefs(parsedPackage.files)) {
-    if (shouldExcludeFromRuntimePackage(fileRef)) continue
-
-    const safePath = safePathPart(fileRef.path)
-    const entry = zip.file(fileRef.path) ?? zip.file(safePath)
-    if (!entry) {
-      throw new Error(`Package file is missing from zip: ${fileRef.path}`)
-    }
-    runtimeZip.file(safePath, await entry.async('blob'))
-  }
-
-  const runtimeFilename = `${packageId}-runtime.zip`
-  const blob = await runtimeZip.generateAsync({
-    type: 'blob',
-    compression: 'DEFLATE',
-  })
-
-  return {
-    path: runtimeFilename,
-    filename: runtimeFilename,
-    role: 'support',
-    key: `${cosPrefix}/${runtimeFilename}`,
-    blob,
-    mimeType: 'application/zip',
-  }
 }
 
 async function createUploadedFileRecord(
@@ -307,7 +251,7 @@ async function createUploadedFileRecord(
   candidate: UploadCandidate,
   url: string,
 ): Promise<UploadedFileMapping> {
-  const md5 = await blobMd5(candidate.blob)
+  const md5 = candidate.md5 ?? await blobMd5(candidate.blob)
   const record = await createFileRecord({
     filename: candidate.filename,
     md5,
@@ -319,6 +263,8 @@ async function createUploadedFileRecord(
 
   return {
     path: candidate.path,
+    originalName: candidate.originalName,
+    filename: candidate.filename,
     role: candidate.role,
     fileId: responseId(record),
     key: candidate.key,
@@ -344,22 +290,21 @@ export async function uploadScanPackageToMain({
     throw new Error('At least one localization data file is required before upload.')
   }
 
-  const packageId = safePackageId(parsedPackage.id)
-  const cosPrefix = `ar-slam-localization/${packageId}`
+  const zipMd5 = await blobMd5(sourceFile)
+  const cosPrefix = `spaces/${zipMd5}`
   emitProgress(onProgress, 'Preparing upload', 1)
   const handler = await createCosHandler()
   const zip = await JSZip.loadAsync(sourceFile)
   const zipCandidates = await buildZipCandidates(zip, parsedPackage, cosPrefix)
   const thumbnailCandidate: UploadCandidate = {
-    path: 'thumbnail.png',
-    filename: `${packageId}-thumbnail.png`,
+    path: 'screenshot',
+    filename: `${zipMd5}.png`,
     role: 'support',
-    key: `${cosPrefix}/thumbnail.png`,
+    key: `spaces/${zipMd5}.png`,
     blob: thumbnailBlob,
     mimeType: thumbnailBlob.type || 'image/png',
   }
-  const runtimeCandidate = await buildRuntimeZipCandidate(zip, parsedPackage, cosPrefix, packageId)
-  const candidates = [...zipCandidates, thumbnailCandidate, runtimeCandidate]
+  const candidates = [...zipCandidates, thumbnailCandidate]
   const uploadedFiles: UploadedFileMapping[] = []
 
   for (const [index, candidate] of candidates.entries()) {
@@ -370,8 +315,7 @@ export async function uploadScanPackageToMain({
 
   const mappingByPath = new Map(uploadedFiles.map((file) => [file.path, file]))
   const modelFile = mappingByPath.get(safePathPart(parsedPackage.modelFile.path))
-  const thumbnailFile = mappingByPath.get('thumbnail.png')
-  const runtimeFile = mappingByPath.get(runtimeCandidate.path)
+  const thumbnailFile = mappingByPath.get('screenshot')
   const localizationFileIds = parsedPackage.localizationFiles.map((fileRef) => {
     const uploadedFile = mappingByPath.get(safePathPart(fileRef.path))
     if (!uploadedFile) {
@@ -379,9 +323,10 @@ export async function uploadScanPackageToMain({
     }
     return uploadedFile.fileId
   })
+  const primaryLocalizationFileId = localizationFileIds[0]
 
-  if (!modelFile || !thumbnailFile || !runtimeFile) {
-    throw new Error('Uploaded model, thumbnail, or runtime package file record is missing.')
+  if (!modelFile || !thumbnailFile || !primaryLocalizationFileId) {
+    throw new Error('Uploaded model, thumbnail, or localization file record is missing.')
   }
 
   emitProgress(onProgress, 'Creating space', 95)
@@ -389,16 +334,15 @@ export async function uploadScanPackageToMain({
     name: parsedPackage.zipName,
     mesh_id: modelFile.fileId,
     image_id: thumbnailFile.fileId,
-    file_id: runtimeFile.fileId,
+    file_id: primaryLocalizationFileId,
     data: {
       source: 'ar-slam-localization',
       provider: parsedPackage.provider,
+      zipMd5,
       zipName: parsedPackage.zipName,
       cosPrefix,
-      runtimeFileId: runtimeFile.fileId,
-      runtimeZipName: runtimeCandidate.filename,
-      runtimeFileKey: runtimeFile.key,
-      runtimePackageExcludes: ['glb', 'gltf'],
+      screenshotKey: thumbnailFile.key,
+      primaryLocalizationFileId,
       modelFileId: modelFile.fileId,
       thumbnailFileId: thumbnailFile.fileId,
       localizationFileIds,
@@ -416,8 +360,8 @@ export async function uploadScanPackageToMain({
   return {
     spaceId,
     spaceName: space.name || parsedPackage.zipName,
+    zipMd5,
     cosPrefix,
-    runtimeFileId: runtimeFile.fileId,
     modelFileId: modelFile.fileId,
     thumbnailFileId: thumbnailFile.fileId,
     localizationFileIds,

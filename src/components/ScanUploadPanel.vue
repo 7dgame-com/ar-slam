@@ -29,6 +29,10 @@
       <p>{{ parseError }}</p>
     </div>
 
+    <div v-if="uploadNotice" class="notice info">
+      <p>{{ uploadNotice }}</p>
+    </div>
+
     <div v-if="parsedPackage" class="package-summary">
       <h3>{{ parsedPackage.zipName }}</h3>
       <p>{{ parsedPackage.provider || 'Provider needs selection' }}</p>
@@ -56,6 +60,7 @@ defineProps<{
   provider: LocalizationProvider
   parsedPackage: ParsedScanPackage | null
   parseError: string
+  uploadNotice: string
   isParsing: boolean
 }>()
 
@@ -162,6 +167,11 @@ function onProviderChange(event: Event) {
 .notice.parsing {
   background: #e6f4ff;
   color: #0958d9;
+}
+
+.notice.info {
+  background: #f0fdf4;
+  color: #166534;
 }
 
 .notice.error {

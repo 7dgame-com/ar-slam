@@ -1,4 +1,5 @@
 import JSZip from 'jszip'
+import SparkMD5 from 'spark-md5'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseScanPackage } from '../domain/scanPackageParser'
 
@@ -9,6 +10,16 @@ async function zipFile(name: string, entries: Record<string, string | Uint8Array
   }
   const blob = await zip.generateAsync({ type: 'blob' })
   return new File([blob], name, { type: 'application/zip' })
+}
+
+async function fileMd5(file: File): Promise<string> {
+  const buffer = await new Promise<ArrayBuffer>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as ArrayBuffer)
+    reader.onerror = () => reject(reader.error ?? new Error('File could not be read.'))
+    reader.readAsArrayBuffer(file)
+  })
+  return SparkMD5.ArrayBuffer.hash(buffer)
 }
 
 describe('scanPackageParser', () => {
@@ -31,6 +42,9 @@ describe('scanPackageParser', () => {
 
     const result = await parseScanPackage(file, 'auto')
 
+    const zipMd5 = await fileMd5(file)
+    expect(result.id).toBe(zipMd5)
+    expect(result.zipMd5).toBe(zipMd5)
     expect(result.provider).toBe('immersal')
     expect(result.modelFile?.name).toBe('textured_mesh.glb')
     expect(result.localizationFiles.map((item) => item.name)).toEqual(['map.bytes'])

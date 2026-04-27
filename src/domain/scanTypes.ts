@@ -32,6 +32,7 @@ export interface ManifestSummary {
 
 export interface ParsedScanPackage {
   id: string
+  zipMd5: string
   zipName: string
   provider: ConcreteLocalizationProvider | null
   files: ScanFileRef[]
@@ -76,11 +77,19 @@ export interface SceneBindingRecord {
 export interface UploadedScanPackage {
   spaceId: number
   spaceName: string
+  zipMd5: string
   cosPrefix: string
-  runtimeFileId: number
   modelFileId: number
   thumbnailFileId: number
   localizationFileIds: number[]
+}
+
+export interface ExistingSpaceOption extends UploadedScanPackage {
+  provider?: string
+  thumbnailUrl?: string
+  modelUrl?: string
+  modelName?: string
+  createdAt?: string
 }
 
 export interface BindingResult extends UploadedScanPackage {

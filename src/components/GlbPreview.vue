@@ -27,6 +27,11 @@ const props = defineProps<{
   modelName: string
 }>()
 
+const emit = defineEmits<{
+  modelLoaded: []
+  modelError: [message: string]
+}>()
+
 const containerRef = ref<HTMLDivElement | null>(null)
 const errorMessage = ref('')
 
@@ -230,11 +235,14 @@ async function loadModel(url: string | null) {
       scene.add(gltf.scene)
       fitCameraToObject(gltf.scene)
       resize()
+      emit('modelLoaded')
     },
     undefined,
     () => {
       if (requestId === loadRequestId) {
-        errorMessage.value = 'GLB model could not be loaded.'
+        const message = 'GLB model could not be loaded.'
+        errorMessage.value = message
+        emit('modelError', message)
       }
     },
   )
