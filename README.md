@@ -23,6 +23,14 @@ npm run dev
 
 `/api/` 默认代理到 `http://localhost:8081`。开发模式的诊断页位于 `http://localhost:3016/api-diagnostics`；生产构建不注册该路由。`/workbench` 是标准 iframe 插件页面，需要由宿主发送 INIT 握手后访问。
 
+## Git 部署
+
+- `develop`：开发集成分支，推送镜像 tag `develop`。
+- `main`：主干稳定分支，推送镜像 tag `main`。
+- `publish`：发布分支，推送镜像 tag `publish` 和 `latest`。
+
+CI 和部署工作流位于 `.github/workflows/`，规则见 [DEPLOYMENT.md](DEPLOYMENT.md)。
+
 ## Template References
 
 - [docs/QUICK_START.md](docs/QUICK_START.md)
