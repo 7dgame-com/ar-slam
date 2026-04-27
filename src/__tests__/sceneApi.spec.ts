@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { arSlamApi, createSceneBindings, fetchSceneBindings, fetchVerseScenes, mainApi } from '../api'
+import {
+  arSlamApi,
+  createSceneBindings,
+  deleteSceneBinding,
+  fetchSceneBindings,
+  fetchVerseScenes,
+  mainApi,
+} from '../api'
 
 describe('scene api', () => {
   const originalMainAdapter = mainApi.defaults.adapter
@@ -13,12 +20,23 @@ describe('scene api', () => {
   it('loads paginated Verse scenes from the main backend', async () => {
     mainApi.defaults.adapter = async (config) => {
       expect(config.url).toBe('/verses')
-      expect(config.params).toEqual({ page: 2, 'per-page': 12, 'VerseSearch[name]': '展厅' })
+      expect(config.params).toEqual({
+        page: 2,
+        'per-page': 12,
+        'VerseSearch[name]': '展厅',
+        expand: 'image',
+        sort: '-created_at',
+      })
 
       return {
         status: 200,
         statusText: 'OK',
-        data: [{ id: 101, name: '旗舰店展厅', description: '上海 / 1F' }],
+        data: [{
+          id: 101,
+          name: '旗舰店展厅',
+          description: '上海 / 1F',
+          image: { url: 'https://cdn.example.com/scene-101.png' },
+        }],
         headers: {
           'x-pagination-total-count': '31',
           'x-pagination-page-count': '3',
@@ -29,9 +47,14 @@ describe('scene api', () => {
       }
     }
 
-    const result = await fetchVerseScenes({ page: 2, perPage: 12, search: '展厅' })
+    const result = await fetchVerseScenes({ page: 2, perPage: 12, search: '展厅', sort: '-created_at' })
 
-    expect(result.scenes).toEqual([{ id: '101', name: '旗舰店展厅', description: '上海 / 1F' }])
+    expect(result.scenes).toEqual([{
+      id: '101',
+      name: '旗舰店展厅',
+      description: '上海 / 1F',
+      thumbnailUrl: 'https://cdn.example.com/scene-101.png',
+    }])
     expect(result.pagination).toEqual({ page: 2, perPage: 12, pageCount: 3, totalCount: 31 })
   })
 
@@ -76,6 +99,23 @@ describe('scene api', () => {
       spaceId: 701,
       verseIds: [101, 102],
     })
+  })
+
+  it('deletes one scene binding by verse id', async () => {
+    arSlamApi.defaults.adapter = async (config) => {
+      expect(config.url).toBe('/bindings/101')
+      expect(config.method).toBe('delete')
+
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: { code: 0, data: { verseId: 101 } },
+        headers: {},
+        config,
+      }
+    }
+
+    await expect(deleteSceneBinding('101')).resolves.toEqual({ code: 0, data: { verseId: 101 } })
   })
 
   it('treats a missing binding endpoint as no binding records while backend catches up', async () => {

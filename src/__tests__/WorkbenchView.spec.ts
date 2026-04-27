@@ -11,6 +11,7 @@ const apiMock = vi.hoisted(() => ({
   fetchVerseScenes: vi.fn(),
   fetchSceneBindings: vi.fn(),
   createSceneBindings: vi.fn(),
+  deleteSceneBinding: vi.fn(),
 }))
 const uploadMock = vi.hoisted(() => ({
   uploadScanPackageToMain: vi.fn(),
@@ -24,6 +25,7 @@ vi.mock('../api', () => ({
   fetchVerseScenes: apiMock.fetchVerseScenes,
   fetchSceneBindings: apiMock.fetchSceneBindings,
   createSceneBindings: apiMock.createSceneBindings,
+  deleteSceneBinding: apiMock.deleteSceneBinding,
 }))
 
 vi.mock('../services/mainResourceUpload', () => ({
@@ -126,15 +128,27 @@ describe('WorkbenchView', () => {
     apiMock.fetchVerseScenes.mockReset()
     apiMock.fetchSceneBindings.mockReset()
     apiMock.createSceneBindings.mockReset()
+    apiMock.deleteSceneBinding.mockReset()
     uploadMock.uploadScanPackageToMain.mockReset()
     apiMock.fetchVerseScenes.mockResolvedValue({
       scenes: [
-        { id: '101', name: '旗舰店展厅', description: '上海 / 1F' },
-        { id: '102', name: '培训教室', description: '深圳 / Lab A' },
+        {
+          id: '101',
+          name: '旗舰店展厅',
+          description: '{"name":"旗舰店展厅","description":"上海 / 1F"}',
+          thumbnailUrl: 'https://cdn.example.com/scene-101.png',
+        },
+        {
+          id: '102',
+          name: '培训教室',
+          description: '{"name":"培训教室","description":"深圳 / Lab A"}',
+          thumbnailUrl: 'https://cdn.example.com/scene-102.png',
+        },
       ],
       pagination: { page: 1, perPage: 10, pageCount: 2, totalCount: 12 },
     })
     apiMock.fetchSceneBindings.mockResolvedValue([])
+    apiMock.deleteSceneBinding.mockResolvedValue({ code: 0 })
     apiMock.createSceneBindings.mockResolvedValue({
       spaceId: 701,
       verseIds: [101, 102],
@@ -158,8 +172,10 @@ describe('WorkbenchView', () => {
 
     expect(input.attributes('aria-label')).toBe('Upload scan ZIP')
     await flushAsync(wrapper)
-    expect(apiMock.fetchVerseScenes).toHaveBeenCalledWith({ page: 1, perPage: 10, search: '' })
+    expect(apiMock.fetchVerseScenes).toHaveBeenCalledWith({ page: 1, perPage: 10, search: '', sort: '-created_at' })
     expect(wrapper.text()).toContain('旗舰店展厅')
+    expect(wrapper.text()).not.toContain('上海 / 1F')
+    expect(wrapper.find('[data-test="scene-thumbnail-101"]').attributes('src')).toBe('https://cdn.example.com/scene-101.png')
     expect(wrapper.text()).toContain('Page 1 / 2')
 
     const file = await uploadFile(wrapper, 'room.zip')
@@ -170,6 +186,7 @@ describe('WorkbenchView', () => {
 
     await wrapper.find('[data-test="scene-101"]').trigger('click')
     await wrapper.find('[data-test="scene-102"]').trigger('click')
+    expect(wrapper.find('[data-test="upload-bind"]').text()).toBe('Bind')
     await wrapper.find('[data-test="upload-bind"]').trigger('click')
     await flushAsync(wrapper)
 
@@ -232,12 +249,51 @@ describe('WorkbenchView', () => {
     const wrapper = mountWorkbench()
 
     await flushAsync(wrapper)
-    expect(wrapper.text()).toContain('Bound to 旧定位包')
+    expect(wrapper.find('[data-test="unbind-101"]').exists()).toBe(true)
+    expect(wrapper.text()).not.toContain('旧定位包')
 
     await uploadFile(wrapper, 'room.zip')
     await wrapper.find('[data-test="scene-101"]').trigger('click')
 
     expect(wrapper.find('[data-test="upload-bind"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('pins bound scenes to the top and can unbind the current user binding', async () => {
+    apiMock.fetchSceneBindings
+      .mockResolvedValueOnce([
+        { sceneId: '102', spaceId: '702', spaceName: '旧定位包' },
+      ])
+      .mockResolvedValueOnce([])
+    parserMock.parseScanPackage.mockResolvedValue(parsedPackage())
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+
+    const sceneButtons = wrapper.findAll('.scene-button')
+    expect(sceneButtons[0].attributes('data-test')).toBe('scene-102')
+    expect(sceneButtons[1].attributes('data-test')).toBe('scene-101')
+
+    await wrapper.find('[data-test="unbind-102"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(apiMock.deleteSceneBinding).toHaveBeenCalledWith('102')
+    expect(apiMock.fetchVerseScenes).toHaveBeenCalledTimes(2)
+  })
+
+  it('reloads scenes with the selected sort order', async () => {
+    parserMock.parseScanPackage.mockResolvedValue(parsedPackage())
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+    await wrapper.find('[data-test="scene-sort"]').setValue('created_at')
+    await flushAsync(wrapper)
+
+    expect(apiMock.fetchVerseScenes).toHaveBeenLastCalledWith({
+      page: 1,
+      perPage: 10,
+      search: '',
+      sort: 'created_at',
+    })
   })
 
   it('refreshes scenes when binding creation fails because a scene was claimed concurrently', async () => {

@@ -30,22 +30,26 @@
       <el-card class="panel-card">
         <template #header>Scene binding</template>
         <SceneBindingPanel
-          :scenes="scenes"
+          :scenes="sortedScenes"
           :selected-scene-ids="selectedSceneIds"
           :pagination="scenePagination"
           :loading="scenesLoading"
           :error="scenesError"
           :search="sceneSearch"
+          :sort="sceneSort"
           :can-submit-binding="canSubmitBinding"
           :submitting="isSubmittingBinding"
+          :unbinding-scene-id="unbindingSceneId"
           :upload-stage="uploadStage"
           :upload-progress="uploadProgress"
           :binding-result="bindingResult"
           @toggle-scene="toggleSceneSelection"
           @page-change="loadScenes"
           @search-change="handleSceneSearch"
+          @sort-change="handleSceneSort"
           @refresh="refreshScenes"
           @submit-binding="handleSubmitBinding"
+          @unbind-scene="handleUnbindScene"
         />
       </el-card>
     </div>
@@ -54,14 +58,14 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue'
-import { createSceneBindings, fetchSceneBindings, fetchVerseScenes } from '../api'
+import { createSceneBindings, deleteSceneBinding, fetchSceneBindings, fetchVerseScenes } from '../api'
 import GlbPreview from '../components/GlbPreview.vue'
 import ScanUploadPanel from '../components/ScanUploadPanel.vue'
 import SceneBindingPanel from '../components/SceneBindingPanel.vue'
 import { useScanWorkbench } from '../composables/useScanWorkbench'
 import { parseScanPackage } from '../domain/scanPackageParser'
 import { uploadScanPackageToMain } from '../services/mainResourceUpload'
-import type { LocalizationProvider, ScenePagination } from '../domain/scanTypes'
+import type { LocalizationProvider, ScenePagination, SceneSort } from '../domain/scanTypes'
 
 interface GlbPreviewExpose {
   captureScreenshot: () => Promise<Blob | null>
@@ -78,6 +82,8 @@ const uploadProgress = ref(0)
 const scenesLoading = ref(false)
 const scenesError = ref('')
 const sceneSearch = ref('')
+const sceneSort = ref<SceneSort>('-created_at')
+const unbindingSceneId = ref('')
 const scenePagination = ref<ScenePagination>({
   page: 1,
   perPage: 10,
@@ -87,9 +93,9 @@ const scenePagination = ref<ScenePagination>({
 let parseRequestId = 0
 let sceneRequestId = 0
 const {
-  scenes,
   parsedPackage,
   selectedSceneIds,
+  sortedScenes,
   bindingResult,
   canSubmitBinding,
   setScenes,
@@ -109,6 +115,7 @@ async function loadScenes(page = scenePagination.value.page) {
       page,
       perPage: scenePagination.value.perPage,
       search: sceneSearch.value,
+      sort: sceneSort.value,
     })
     const bindings = await fetchSceneBindings(result.scenes.map((scene) => scene.id))
 
@@ -147,6 +154,29 @@ async function refreshScenes() {
 async function handleSceneSearch(search: string) {
   sceneSearch.value = search
   await loadScenes(1)
+}
+
+async function handleSceneSort(sort: SceneSort) {
+  sceneSort.value = sort
+  await loadScenes(1)
+}
+
+async function handleUnbindScene(sceneId: string) {
+  if (unbindingSceneId.value) return
+
+  scenesError.value = ''
+  unbindingSceneId.value = sceneId
+  try {
+    await deleteSceneBinding(sceneId)
+    await refreshScenes()
+  } catch (error) {
+    scenesError.value = error instanceof Error && error.message
+      ? error.message
+      : 'Scene binding could not be removed.'
+    await refreshScenes()
+  } finally {
+    unbindingSceneId.value = ''
+  }
 }
 
 async function handleSubmitBinding() {

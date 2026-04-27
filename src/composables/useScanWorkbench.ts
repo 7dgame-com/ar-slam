@@ -12,6 +12,18 @@ export function useScanWorkbench() {
     return scenes.value.filter((scene) => selectedSet.has(scene.id))
   })
 
+  const sortedScenes = computed(() => {
+    return scenes.value
+      .map((scene, index) => ({ scene, index }))
+      .sort((left, right) => {
+        const leftBound = Boolean(left.scene.boundSpaceId)
+        const rightBound = Boolean(right.scene.boundSpaceId)
+        if (leftBound !== rightBound) return leftBound ? -1 : 1
+        return left.index - right.index
+      })
+      .map(({ scene }) => scene)
+  })
+
   const selectedHasUnavailableScene = computed(() => {
     return selectedScenes.value.some((scene) => Boolean(scene.boundSpaceId))
   })
@@ -86,6 +98,7 @@ export function useScanWorkbench() {
     parsedPackage,
     selectedSceneIds,
     selectedScenes,
+    sortedScenes,
     bindingResult,
     canSubmitBinding,
     setScenes,

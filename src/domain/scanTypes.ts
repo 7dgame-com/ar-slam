@@ -48,6 +48,7 @@ export interface SceneOption {
   id: string
   name: string
   description?: string
+  thumbnailUrl?: string
   boundSpaceId?: string
   boundSpaceName?: string
 }
@@ -63,6 +64,8 @@ export interface SceneListResult {
   scenes: SceneOption[]
   pagination: ScenePagination
 }
+
+export type SceneSort = '-created_at' | 'created_at' | 'name'
 
 export interface SceneBindingRecord {
   sceneId: string

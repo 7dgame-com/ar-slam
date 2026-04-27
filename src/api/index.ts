@@ -279,12 +279,18 @@ interface VerseSceneResponse {
   name?: string
   description?: string | null
   info?: string | null
+  image?: {
+    url?: string | null
+  } | null
+  thumbnailUrl?: string | null
+  thumbnail_url?: string | null
 }
 
 interface SceneListParams {
   page: number
   perPage: number
   search?: string
+  sort?: string
 }
 
 function headerInt(headers: Record<string, unknown>, key: string, fallback: number): number {
@@ -298,6 +304,7 @@ function toSceneOption(item: VerseSceneResponse): SceneOption {
     id: String(item.id),
     name: item.name || `Scene ${item.id}`,
     description: item.description || item.info || undefined,
+    thumbnailUrl: item.image?.url || item.thumbnailUrl || item.thumbnail_url || undefined,
   }
 }
 
@@ -308,6 +315,8 @@ export async function fetchVerseScenes(params: SceneListParams): Promise<SceneLi
       page: params.page,
       'per-page': params.perPage,
       'VerseSearch[name]': search || undefined,
+      expand: 'image',
+      sort: params.sort || '-created_at',
     },
   })
 
@@ -364,4 +373,8 @@ export async function createSceneBindings(payload: CreateSceneBindingsPayload): 
     spaceId: payload.spaceId,
     verseIds: payload.verseIds,
   }).then((response) => response.data)
+}
+
+export async function deleteSceneBinding(verseId: string): Promise<unknown> {
+  return arSlamApi.delete(`/bindings/${encodeURIComponent(verseId)}`).then((response) => response.data)
 }
