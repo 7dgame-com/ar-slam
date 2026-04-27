@@ -37,7 +37,7 @@ hkccr.ccs.tencentyun.com/plugins/ar-slam-localization
 
 Required GitHub Actions secrets:
 
-- `TENCENT_REGISTRY_USERNAME`
+- `TENCENT_REGISTRY_USERNAME` or `TENCENT_REGISTRY_USER`
 - `TENCENT_REGISTRY_PASSWORD`
 
 ## Release Flow
