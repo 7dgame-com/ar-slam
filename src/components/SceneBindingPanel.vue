@@ -19,14 +19,14 @@
         :key="scene.id"
         type="button"
         class="scene-button"
-        :class="{ active: selectedSceneIds.includes(scene.id), disabled: Boolean(scene.boundSlamId) }"
+        :class="{ active: selectedSceneIds.includes(scene.id), disabled: Boolean(scene.boundSpaceId) }"
         :data-test="`scene-${scene.id}`"
-        :disabled="Boolean(scene.boundSlamId)"
+        :disabled="Boolean(scene.boundSpaceId)"
         @click="$emit('toggleScene', scene.id)"
       >
         <strong>{{ scene.name }}</strong>
         <span>{{ scene.description || `Scene #${scene.id}` }}</span>
-        <span v-if="scene.boundSlamId" class="bound-text">Bound to {{ scene.boundSlamName || scene.boundSlamId }}</span>
+        <span v-if="scene.boundSpaceId" class="bound-text">Bound to {{ scene.boundSpaceName || scene.boundSpaceId }}</span>
       </button>
       <p v-if="!loading && scenes.length === 0" class="empty-text">No scenes found</p>
     </div>
@@ -54,20 +54,25 @@
     <button
       type="button"
       class="draft-button"
-      data-test="create-draft"
-      :disabled="!canCreateDraft"
-      @click="$emit('createDraft')"
+      data-test="upload-bind"
+      :disabled="!canSubmitBinding || submitting"
+      @click="$emit('submitBinding')"
     >
-      {{ loading ? 'Loading scenes' : 'Create binding draft' }}
+      {{ submitting ? 'Uploading and binding' : loading ? 'Loading scenes' : 'Upload and bind' }}
     </button>
 
-    <pre v-if="bindingDraft" class="draft-json">Binding Draft
-{{ JSON.stringify(bindingDraft, null, 2) }}</pre>
+    <div v-if="submitting || uploadStage" class="upload-progress" data-test="upload-progress">
+      <span>{{ uploadStage || 'Preparing upload' }}</span>
+      <strong>{{ uploadProgress }}%</strong>
+    </div>
+
+    <pre v-if="bindingResult" class="draft-json">Binding Result
+{{ JSON.stringify(bindingResult, null, 2) }}</pre>
   </section>
 </template>
 
 <script setup lang="ts">
-import type { BindingDraft, SceneOption, ScenePagination } from '../domain/scanTypes'
+import type { BindingResult, SceneOption, ScenePagination } from '../domain/scanTypes'
 
 defineProps<{
   scenes: SceneOption[]
@@ -76,8 +81,11 @@ defineProps<{
   loading: boolean
   error: string
   search: string
-  canCreateDraft: boolean
-  bindingDraft: BindingDraft | null
+  canSubmitBinding: boolean
+  submitting: boolean
+  uploadStage: string
+  uploadProgress: number
+  bindingResult: BindingResult | null
 }>()
 
 const emit = defineEmits<{
@@ -85,7 +93,7 @@ const emit = defineEmits<{
   pageChange: [page: number]
   searchChange: [search: string]
   refresh: []
-  createDraft: []
+  submitBinding: []
 }>()
 
 function emitSearch(event: Event) {
@@ -175,6 +183,18 @@ function emitSearch(event: Event) {
 .draft-button:disabled {
   background: var(--text-placeholder);
   cursor: not-allowed;
+}
+
+.upload-progress {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  background: var(--primary-light);
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
 }
 
 .secondary-button {

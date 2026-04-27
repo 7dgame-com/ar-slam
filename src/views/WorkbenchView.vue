@@ -21,6 +21,7 @@
       <el-card class="panel-card preview-card">
         <template #header>3D preview</template>
         <GlbPreview
+          ref="previewRef"
           :model-url="parsedPackage?.modelBlobUrl || null"
           :model-name="parsedPackage?.modelFile?.name || ''"
         />
@@ -35,13 +36,16 @@
           :loading="scenesLoading"
           :error="scenesError"
           :search="sceneSearch"
-          :can-create-draft="canCreateDraft"
-          :binding-draft="bindingDraft"
+          :can-submit-binding="canSubmitBinding"
+          :submitting="isSubmittingBinding"
+          :upload-stage="uploadStage"
+          :upload-progress="uploadProgress"
+          :binding-result="bindingResult"
           @toggle-scene="toggleSceneSelection"
           @page-change="loadScenes"
           @search-change="handleSceneSearch"
           @refresh="refreshScenes"
-          @create-draft="handleCreateDraft"
+          @submit-binding="handleSubmitBinding"
         />
       </el-card>
     </div>
@@ -56,12 +60,21 @@ import ScanUploadPanel from '../components/ScanUploadPanel.vue'
 import SceneBindingPanel from '../components/SceneBindingPanel.vue'
 import { useScanWorkbench } from '../composables/useScanWorkbench'
 import { parseScanPackage } from '../domain/scanPackageParser'
+import { uploadScanPackageToMain } from '../services/mainResourceUpload'
 import type { LocalizationProvider, ScenePagination } from '../domain/scanTypes'
+
+interface GlbPreviewExpose {
+  captureScreenshot: () => Promise<Blob | null>
+}
 
 const provider = ref<LocalizationProvider>('auto')
 const currentFile = ref<File | null>(null)
+const previewRef = ref<GlbPreviewExpose | null>(null)
 const parseError = ref('')
 const isParsing = ref(false)
+const isSubmittingBinding = ref(false)
+const uploadStage = ref('')
+const uploadProgress = ref(0)
 const scenesLoading = ref(false)
 const scenesError = ref('')
 const sceneSearch = ref('')
@@ -77,12 +90,12 @@ const {
   scenes,
   parsedPackage,
   selectedSceneIds,
-  bindingDraft,
-  canCreateDraft,
+  bindingResult,
+  canSubmitBinding,
   setScenes,
   setParsedPackage,
   toggleSceneSelection,
-  createBindingDraft,
+  createBindingResult,
   dispose,
 } = useScanWorkbench()
 
@@ -107,8 +120,8 @@ async function loadScenes(page = scenePagination.value.page) {
       return binding
         ? {
             ...scene,
-            boundSlamId: binding.slamId,
-            boundSlamName: binding.slamName,
+            boundSpaceId: binding.spaceId,
+            boundSpaceName: binding.spaceName,
           }
         : scene
     }))
@@ -136,19 +149,54 @@ async function handleSceneSearch(search: string) {
   await loadScenes(1)
 }
 
-async function handleCreateDraft() {
-  const draft = createBindingDraft()
-  if (!draft) return
+async function handleSubmitBinding() {
+  if (!currentFile.value || !parsedPackage.value || !canSubmitBinding.value || isSubmittingBinding.value) {
+    return
+  }
+
+  const verseIds = [...selectedSceneIds.value]
   scenesError.value = ''
+  uploadStage.value = 'Preparing thumbnail'
+  uploadProgress.value = 0
+  isSubmittingBinding.value = true
+
   try {
-    await createSceneBindings(draft)
+    const thumbnailBlob = await previewRef.value?.captureScreenshot()
+    if (!thumbnailBlob) {
+      throw new Error('Thumbnail could not be captured. Please wait for the 3D preview to finish loading.')
+    }
+
+    const uploadedPackage = await uploadScanPackageToMain({
+      sourceFile: currentFile.value,
+      parsedPackage: parsedPackage.value,
+      thumbnailBlob,
+      onProgress: (progress) => {
+        uploadStage.value = progress.stage
+        uploadProgress.value = Math.round(progress.percent)
+      },
+    })
+
+    uploadStage.value = 'Binding scenes'
+    uploadProgress.value = Math.max(uploadProgress.value, 95)
+    await createSceneBindings({
+      spaceId: uploadedPackage.spaceId,
+      verseIds,
+    })
+    createBindingResult(uploadedPackage)
+    uploadStage.value = 'Binding complete'
+    uploadProgress.value = 100
     await refreshScenes()
   } catch (error) {
     const message = error instanceof Error && error.message
       ? error.message
       : 'Binding could not be created.'
+    scenesError.value = message
     await refreshScenes()
     scenesError.value = message
+    uploadStage.value = ''
+    uploadProgress.value = 0
+  } finally {
+    isSubmittingBinding.value = false
   }
 }
 
@@ -183,6 +231,8 @@ async function parseCurrentFile(file: File) {
 
 async function handleUpload(file: File) {
   currentFile.value = file
+  uploadStage.value = ''
+  uploadProgress.value = 0
   await parseCurrentFile(file)
 }
 

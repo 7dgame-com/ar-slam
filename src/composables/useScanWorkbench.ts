@@ -1,11 +1,11 @@
 import { computed, ref } from 'vue'
-import type { BindingDraft, ParsedScanPackage, SceneOption } from '../domain/scanTypes'
+import type { BindingResult, ParsedScanPackage, SceneOption, UploadedScanPackage } from '../domain/scanTypes'
 
 export function useScanWorkbench() {
   const scenes = ref<SceneOption[]>([])
   const parsedPackage = ref<ParsedScanPackage | null>(null)
   const selectedSceneIds = ref<string[]>([])
-  const bindingDraft = ref<BindingDraft | null>(null)
+  const bindingResult = ref<BindingResult | null>(null)
 
   const selectedScenes = computed(() => {
     const selectedSet = new Set(selectedSceneIds.value)
@@ -13,10 +13,10 @@ export function useScanWorkbench() {
   })
 
   const selectedHasUnavailableScene = computed(() => {
-    return selectedScenes.value.some((scene) => Boolean(scene.boundSlamId))
+    return selectedScenes.value.some((scene) => Boolean(scene.boundSpaceId))
   })
 
-  const canCreateDraft = computed(() => {
+  const canSubmitBinding = computed(() => {
     return Boolean(
       parsedPackage.value?.provider &&
       parsedPackage.value.modelFile &&
@@ -29,7 +29,7 @@ export function useScanWorkbench() {
 
   function setScenes(nextScenes: SceneOption[]) {
     scenes.value = nextScenes
-    const availableIds = new Set(nextScenes.filter((scene) => !scene.boundSlamId).map((scene) => scene.id))
+    const availableIds = new Set(nextScenes.filter((scene) => !scene.boundSpaceId).map((scene) => scene.id))
     selectedSceneIds.value = selectedSceneIds.value.filter((sceneId) => availableIds.has(sceneId))
   }
 
@@ -38,46 +38,41 @@ export function useScanWorkbench() {
       URL.revokeObjectURL(parsedPackage.value.modelBlobUrl)
     }
     parsedPackage.value = nextPackage
-    bindingDraft.value = null
+    bindingResult.value = null
   }
 
   function toggleSceneSelection(sceneId: string) {
     const scene = scenes.value.find((item) => item.id === sceneId)
-    if (!scene || scene.boundSlamId) return
+    if (!scene || scene.boundSpaceId) return
 
     if (selectedSceneIds.value.includes(sceneId)) {
       selectedSceneIds.value = selectedSceneIds.value.filter((id) => id !== sceneId)
     } else {
       selectedSceneIds.value = [...selectedSceneIds.value, sceneId]
     }
-    bindingDraft.value = null
+    bindingResult.value = null
   }
 
   function clearSceneSelection() {
     selectedSceneIds.value = []
-    bindingDraft.value = null
+    bindingResult.value = null
   }
 
-  function createBindingDraft(): BindingDraft | null {
-    if (!canCreateDraft.value || !parsedPackage.value?.provider || !parsedPackage.value.modelFile) {
+  function createBindingResult(uploadedPackage: UploadedScanPackage): BindingResult | null {
+    if (!canSubmitBinding.value) {
       return null
     }
 
-    const draft: BindingDraft = {
-      slamId: parsedPackage.value.id,
-      slamName: parsedPackage.value.zipName,
+    const result: BindingResult = {
+      ...uploadedPackage,
       scenes: selectedScenes.value.map((scene) => ({
         id: scene.id,
         name: scene.name,
       })),
-      provider: parsedPackage.value.provider,
-      zipName: parsedPackage.value.zipName,
-      modelFileName: parsedPackage.value.modelFile.name,
-      localizationFileNames: parsedPackage.value.localizationFiles.map((file) => file.name),
       createdAt: new Date().toISOString(),
     }
-    bindingDraft.value = draft
-    return draft
+    bindingResult.value = result
+    return result
   }
 
   function dispose() {
@@ -91,13 +86,13 @@ export function useScanWorkbench() {
     parsedPackage,
     selectedSceneIds,
     selectedScenes,
-    bindingDraft,
-    canCreateDraft,
+    bindingResult,
+    canSubmitBinding,
     setScenes,
     setParsedPackage,
     toggleSceneSelection,
     clearSceneSelection,
-    createBindingDraft,
+    createBindingResult,
     dispose,
   }
 }

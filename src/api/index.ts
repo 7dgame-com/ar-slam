@@ -9,7 +9,7 @@ import {
   getRefreshToken,
   setRefreshToken
 } from '../utils/token'
-import type { BindingDraft, SceneBindingRecord, SceneListResult, SceneOption } from '../domain/scanTypes'
+import type { CreateSceneBindingsPayload, SceneBindingRecord, SceneListResult, SceneOption } from '../domain/scanTypes'
 
 /**
  * AR SLAM 定位插件业务 API 实例
@@ -194,6 +194,86 @@ export function verifyCurrentToken(): Promise<{ data: VerifyTokenResponse }> {
   return mainApi.get('/plugin/verify-token')
 }
 
+export interface MainCloudPublicConfig {
+  bucket: string
+  region: string
+}
+
+export interface MainCloudConfigResponse {
+  public?: MainCloudPublicConfig
+  bucket?: string
+  region?: string
+}
+
+export interface CosPublicTokenResponse {
+  Credentials?: {
+    TmpSecretId: string
+    TmpSecretKey: string
+    Token: string
+  }
+  credentials?: {
+    tmpSecretId?: string
+    tmpSecretKey?: string
+    sessionToken?: string
+    token?: string
+  }
+  StartTime?: number
+  ExpiredTime?: number
+  startTime?: number
+  expiredTime?: number
+}
+
+export interface CreateFileRecordPayload {
+  filename: string
+  md5: string
+  key: string
+  url: string
+  size?: number
+  mime_type?: string
+  type?: string
+  [key: string]: unknown
+}
+
+export interface FileRecordResponse {
+  id: number | string
+  filename?: string
+  key?: string
+  url?: string
+}
+
+export interface CreateSpacePayload {
+  name: string
+  mesh_id: number
+  image_id: number
+  file_id: number
+  data: Record<string, unknown>
+}
+
+export interface SpaceRecordResponse {
+  id: number | string
+  name?: string
+  mesh_id?: number
+  image_id?: number
+  file_id?: number
+  data?: unknown
+}
+
+export async function fetchCloudConfig(): Promise<MainCloudConfigResponse> {
+  return mainApi.get<MainCloudConfigResponse>('/tencent-cloud/cloud').then((response) => response.data)
+}
+
+export async function fetchCosPublicToken(): Promise<CosPublicTokenResponse> {
+  return mainApi.get<CosPublicTokenResponse>('/tencent-cloud/public-token').then((response) => response.data)
+}
+
+export async function createFileRecord(payload: CreateFileRecordPayload): Promise<FileRecordResponse> {
+  return mainApi.post<FileRecordResponse>('/files', payload).then((response) => response.data)
+}
+
+export async function createSpaceRecord(payload: CreateSpacePayload): Promise<SpaceRecordResponse> {
+  return mainApi.post<SpaceRecordResponse>('/spaces', payload).then((response) => response.data)
+}
+
 interface VerseSceneResponse {
   id: number | string
   name?: string
@@ -246,18 +326,20 @@ export async function fetchSceneBindings(sceneIds: string[]): Promise<SceneBindi
   if (sceneIds.length === 0) return []
 
   let response: { data: Array<{
+    verseId?: number | string
+    verse_id?: number | string
     sceneId?: number | string
     scene_id?: number | string
-    slamId?: string
-    slam_id?: string
-    slamName?: string
-    slam_name?: string
+    spaceId?: number | string
+    space_id?: number | string
+    spaceName?: string
+    space_name?: string
   }> }
 
   try {
     response = await arSlamApi.get('/bindings', {
       params: {
-        sceneIds: sceneIds.join(','),
+        verseIds: sceneIds.join(','),
       },
     })
   } catch (error) {
@@ -270,21 +352,16 @@ export async function fetchSceneBindings(sceneIds: string[]): Promise<SceneBindi
 
   return response.data
     .map((item) => ({
-      sceneId: String(item.sceneId ?? item.scene_id ?? ''),
-      slamId: String(item.slamId ?? item.slam_id ?? ''),
-      slamName: item.slamName ?? item.slam_name,
+      sceneId: String(item.verseId ?? item.verse_id ?? item.sceneId ?? item.scene_id ?? ''),
+      spaceId: String(item.spaceId ?? item.space_id ?? ''),
+      spaceName: item.spaceName ?? item.space_name,
     }))
-    .filter((item) => item.sceneId && item.slamId)
+    .filter((item) => item.sceneId && item.spaceId)
 }
 
-export async function createSceneBindings(draft: BindingDraft): Promise<unknown> {
+export async function createSceneBindings(payload: CreateSceneBindingsPayload): Promise<unknown> {
   return arSlamApi.post('/bindings', {
-    slamId: draft.slamId,
-    slamName: draft.slamName,
-    provider: draft.provider,
-    zipName: draft.zipName,
-    modelFileName: draft.modelFileName,
-    localizationFileNames: draft.localizationFileNames,
-    sceneIds: draft.scenes.map((scene) => scene.id),
+    spaceId: payload.spaceId,
+    verseIds: payload.verseIds,
   }).then((response) => response.data)
 }

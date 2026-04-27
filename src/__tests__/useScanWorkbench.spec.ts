@@ -44,49 +44,63 @@ describe('useScanWorkbench', () => {
     },
   ]
 
-  it('creates a binding draft for multiple backend scenes from one SLAM package', () => {
+  it('records a binding result for multiple backend scenes from one uploaded space', () => {
     const workbench = useScanWorkbench()
     workbench.setParsedPackage(parsedPackage())
     workbench.setScenes(scenes)
     workbench.toggleSceneSelection('101')
     workbench.toggleSceneSelection('102')
 
-    const draft = workbench.createBindingDraft()
+    const result = workbench.createBindingResult({
+      spaceId: 701,
+      spaceName: 'room.zip',
+      cosPrefix: 'ar-slam-localization/pkg-1',
+      runtimeFileId: 14,
+      modelFileId: 11,
+      thumbnailFileId: 13,
+      localizationFileIds: [12],
+    })
 
-    expect(draft?.slamId).toBe('pkg-1')
-    expect(draft?.scenes).toEqual([
+    expect(result?.spaceId).toBe(701)
+    expect(result?.spaceName).toBe('room.zip')
+    expect(result?.scenes).toEqual([
       { id: '101', name: '旗舰店展厅' },
       { id: '102', name: '培训教室' },
     ])
-    expect(draft?.provider).toBe('immersal')
-    expect(draft?.modelFileName).toBe('room.glb')
-    expect(draft?.localizationFileNames).toEqual(['map.bytes'])
   })
 
-  it('does not select a scene already bound to a different SLAM package', () => {
+  it('does not select a scene already bound to a different space', () => {
     const workbench = useScanWorkbench()
     workbench.setParsedPackage(parsedPackage())
     workbench.setScenes([
       {
         id: '101',
         name: '旗舰店展厅',
-        boundSlamId: 'other-slam',
-        boundSlamName: '旧定位包',
+        boundSpaceId: '702',
+        boundSpaceName: '旧定位包',
       },
     ])
 
     workbench.toggleSceneSelection('101')
 
     expect(workbench.selectedSceneIds.value).toEqual([])
-    expect(workbench.canCreateDraft.value).toBe(false)
+    expect(workbench.canSubmitBinding.value).toBe(false)
   })
 
-  it('does not create a binding draft when package validation has errors', () => {
+  it('does not create a binding result when package validation has errors', () => {
     const workbench = useScanWorkbench()
     workbench.setParsedPackage(parsedPackage({ errors: ['Missing localization data.'] }))
     workbench.setScenes(scenes)
     workbench.toggleSceneSelection('101')
 
-    expect(workbench.createBindingDraft()).toBe(null)
+    expect(workbench.createBindingResult({
+      spaceId: 701,
+      spaceName: 'room.zip',
+      cosPrefix: 'ar-slam-localization/pkg-1',
+      runtimeFileId: 14,
+      modelFileId: 11,
+      thumbnailFileId: 13,
+      localizationFileIds: [12],
+    })).toBe(null)
   })
 })

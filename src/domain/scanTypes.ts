@@ -48,8 +48,8 @@ export interface SceneOption {
   id: string
   name: string
   description?: string
-  boundSlamId?: string
-  boundSlamName?: string
+  boundSpaceId?: string
+  boundSpaceName?: string
 }
 
 export interface ScenePagination {
@@ -66,20 +66,29 @@ export interface SceneListResult {
 
 export interface SceneBindingRecord {
   sceneId: string
-  slamId: string
-  slamName?: string
+  spaceId: string
+  spaceName?: string
 }
 
-export interface BindingDraft {
-  slamId: string
-  slamName: string
+export interface UploadedScanPackage {
+  spaceId: number
+  spaceName: string
+  cosPrefix: string
+  runtimeFileId: number
+  modelFileId: number
+  thumbnailFileId: number
+  localizationFileIds: number[]
+}
+
+export interface BindingResult extends UploadedScanPackage {
   scenes: Array<{
     id: string
     name: string
   }>
-  provider: ConcreteLocalizationProvider
-  zipName: string
-  modelFileName: string
-  localizationFileNames: string[]
   createdAt: string
+}
+
+export interface CreateSceneBindingsPayload {
+  spaceId: number
+  verseIds: string[]
 }

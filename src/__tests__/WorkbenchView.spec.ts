@@ -12,6 +12,9 @@ const apiMock = vi.hoisted(() => ({
   fetchSceneBindings: vi.fn(),
   createSceneBindings: vi.fn(),
 }))
+const uploadMock = vi.hoisted(() => ({
+  uploadScanPackageToMain: vi.fn(),
+}))
 
 vi.mock('../domain/scanPackageParser', () => ({
   parseScanPackage: parserMock.parseScanPackage,
@@ -23,9 +26,19 @@ vi.mock('../api', () => ({
   createSceneBindings: apiMock.createSceneBindings,
 }))
 
+vi.mock('../services/mainResourceUpload', () => ({
+  uploadScanPackageToMain: uploadMock.uploadScanPackageToMain,
+}))
+
 vi.mock('../components/GlbPreview.vue', () => ({
   default: {
     props: ['modelUrl', 'modelName'],
+    setup(_props: unknown, { expose }: { expose: (exposed: Record<string, unknown>) => void }) {
+      expose({
+        captureScreenshot: vi.fn(async () => new Blob(['thumb'], { type: 'image/png' })),
+      })
+      return {}
+    },
     template: '<div data-test="glb-preview">{{ modelName }}</div>',
   },
 }))
@@ -113,6 +126,7 @@ describe('WorkbenchView', () => {
     apiMock.fetchVerseScenes.mockReset()
     apiMock.fetchSceneBindings.mockReset()
     apiMock.createSceneBindings.mockReset()
+    uploadMock.uploadScanPackageToMain.mockReset()
     apiMock.fetchVerseScenes.mockResolvedValue({
       scenes: [
         { id: '101', name: '旗舰店展厅', description: '上海 / 1F' },
@@ -122,13 +136,22 @@ describe('WorkbenchView', () => {
     })
     apiMock.fetchSceneBindings.mockResolvedValue([])
     apiMock.createSceneBindings.mockResolvedValue({
-      id: 'binding-1',
-      sceneIds: ['101', '102'],
+      spaceId: 701,
+      verseIds: [101, 102],
+    })
+    uploadMock.uploadScanPackageToMain.mockResolvedValue({
+      spaceId: 701,
+      spaceName: 'room.zip',
+      cosPrefix: 'ar-slam-localization/pkg-room.zip',
+      runtimeFileId: 14,
+      modelFileId: 11,
+      thumbnailFileId: 13,
+      localizationFileIds: [12],
     })
     Object.defineProperty(URL, 'revokeObjectURL', { value: vi.fn(), configurable: true })
   })
 
-  it('shows backend scenes and creates a multi-scene binding draft', async () => {
+  it('shows backend scenes, uploads the package, creates a space, and binds multiple scenes', async () => {
     parserMock.parseScanPackage.mockResolvedValue(parsedPackage())
     const wrapper = mountWorkbench()
     const input = wrapper.find('input[type="file"]')
@@ -139,7 +162,7 @@ describe('WorkbenchView', () => {
     expect(wrapper.text()).toContain('旗舰店展厅')
     expect(wrapper.text()).toContain('Page 1 / 2')
 
-    await uploadFile(wrapper, 'room.zip')
+    const file = await uploadFile(wrapper, 'room.zip')
 
     expect(wrapper.text()).toContain('room.zip')
     expect(wrapper.text()).toContain('room.glb')
@@ -147,22 +170,63 @@ describe('WorkbenchView', () => {
 
     await wrapper.find('[data-test="scene-101"]').trigger('click')
     await wrapper.find('[data-test="scene-102"]').trigger('click')
-    await wrapper.find('[data-test="create-draft"]').trigger('click')
+    await wrapper.find('[data-test="upload-bind"]').trigger('click')
     await flushAsync(wrapper)
 
-    expect(apiMock.createSceneBindings).toHaveBeenCalledWith(expect.objectContaining({
-      slamId: 'pkg-room.zip',
-      scenes: [
-        { id: '101', name: '旗舰店展厅' },
-        { id: '102', name: '培训教室' },
-      ],
+    expect(uploadMock.uploadScanPackageToMain).toHaveBeenCalledWith(expect.objectContaining({
+      sourceFile: file,
+      parsedPackage: expect.objectContaining({ zipName: 'room.zip' }),
+      thumbnailBlob: expect.any(Blob),
     }))
-    expect(wrapper.text()).toContain('Binding Draft')
+    expect(apiMock.createSceneBindings).toHaveBeenCalledWith({
+      spaceId: 701,
+      verseIds: ['101', '102'],
+    })
+    expect(wrapper.text()).toContain('Binding Result')
+    expect(wrapper.text()).toContain('"spaceId": 701')
+  })
+
+  it('shows upload progress while the main resource upload is running', async () => {
+    const upload = deferred<{
+      spaceId: number
+      spaceName: string
+      cosPrefix: string
+      runtimeFileId: number
+      modelFileId: number
+      thumbnailFileId: number
+      localizationFileIds: number[]
+    }>()
+    uploadMock.uploadScanPackageToMain.mockImplementation(({ onProgress }) => {
+      onProgress({ stage: 'Uploading room/model.glb', percent: 45 })
+      return upload.promise
+    })
+    parserMock.parseScanPackage.mockResolvedValue(parsedPackage())
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+    await uploadFile(wrapper, 'room.zip')
+    await wrapper.find('[data-test="scene-101"]').trigger('click')
+    await wrapper.find('[data-test="upload-bind"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(wrapper.text()).toContain('Uploading room/model.glb')
+    expect(wrapper.text()).toContain('45%')
+
+    upload.resolve({
+      spaceId: 701,
+      spaceName: 'room.zip',
+      cosPrefix: 'ar-slam-localization/pkg-room.zip',
+      runtimeFileId: 14,
+      modelFileId: 11,
+      thumbnailFileId: 13,
+      localizationFileIds: [12],
+    })
+    await flushAsync(wrapper)
   })
 
   it('does not allow selecting a scene that is already bound to another SLAM package', async () => {
     apiMock.fetchSceneBindings.mockResolvedValue([
-      { sceneId: '101', slamId: 'slam-existing', slamName: '旧定位包' },
+      { sceneId: '101', spaceId: '702', spaceName: '旧定位包' },
     ])
     parserMock.parseScanPackage.mockResolvedValue(parsedPackage())
     const wrapper = mountWorkbench()
@@ -173,7 +237,7 @@ describe('WorkbenchView', () => {
     await uploadFile(wrapper, 'room.zip')
     await wrapper.find('[data-test="scene-101"]').trigger('click')
 
-    expect(wrapper.find('[data-test="create-draft"]').attributes('disabled')).toBeDefined()
+    expect(wrapper.find('[data-test="upload-bind"]').attributes('disabled')).toBeDefined()
   })
 
   it('refreshes scenes when binding creation fails because a scene was claimed concurrently', async () => {
@@ -184,7 +248,8 @@ describe('WorkbenchView', () => {
     await flushAsync(wrapper)
     await uploadFile(wrapper, 'room.zip')
     await wrapper.find('[data-test="scene-101"]').trigger('click')
-    await wrapper.find('[data-test="create-draft"]').trigger('click')
+    await wrapper.find('[data-test="upload-bind"]').trigger('click')
+    await flushAsync(wrapper)
     await flushAsync(wrapper)
 
     expect(wrapper.text()).toContain('Scene is already bound.')

@@ -66,7 +66,7 @@ function initScene() {
   camera = new THREE.PerspectiveCamera(45, 1, 0.01, 1000)
   camera.position.set(3, 2.2, 3)
 
-  renderer = new THREE.WebGLRenderer({ antialias: true })
+  renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true })
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
   renderer.outputColorSpace = THREE.SRGBColorSpace
   renderer.domElement.className = 'preview-renderer'
@@ -173,6 +173,21 @@ function clearModel() {
   currentModel = null
 }
 
+async function captureScreenshot(): Promise<Blob | null> {
+  if (!renderer || !scene || !camera || !currentModel || errorMessage.value) {
+    return null
+  }
+
+  controls?.update()
+  renderer.render(scene, camera)
+
+  return new Promise((resolve) => {
+    renderer.domElement.toBlob((blob: Blob | null) => {
+      resolve(blob)
+    }, 'image/png')
+  })
+}
+
 function fitCameraToObject(object: PreviewObject) {
   if (!camera || !controls) return
 
@@ -226,6 +241,10 @@ async function loadModel(url: string | null) {
 }
 
 watch(() => props.modelUrl, loadModel, { immediate: true })
+
+defineExpose({
+  captureScreenshot,
+})
 
 onBeforeUnmount(() => {
   loadRequestId += 1

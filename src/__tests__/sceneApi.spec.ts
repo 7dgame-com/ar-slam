@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { arSlamApi, fetchSceneBindings, fetchVerseScenes, mainApi } from '../api'
+import { arSlamApi, createSceneBindings, fetchSceneBindings, fetchVerseScenes, mainApi } from '../api'
 
 describe('scene api', () => {
   const originalMainAdapter = mainApi.defaults.adapter
@@ -38,20 +38,44 @@ describe('scene api', () => {
   it('loads existing bindings for a page of scene ids', async () => {
     arSlamApi.defaults.adapter = async (config) => {
       expect(config.url).toBe('/bindings')
-      expect(config.params).toEqual({ sceneIds: '101,102' })
+      expect(config.params).toEqual({ verseIds: '101,102' })
 
       return {
         status: 200,
         statusText: 'OK',
-        data: [{ sceneId: 102, slamId: 'slam-a', slamName: 'A 馆定位包' }],
+        data: [{ verseId: 102, spaceId: 701, spaceName: 'A 馆定位包' }],
         headers: {},
         config,
       }
     }
 
     await expect(fetchSceneBindings(['101', '102'])).resolves.toEqual([
-      { sceneId: '102', slamId: 'slam-a', slamName: 'A 馆定位包' },
+      { sceneId: '102', spaceId: '701', spaceName: 'A 馆定位包' },
     ])
+  })
+
+  it('creates scene bindings with a space id and verse ids', async () => {
+    arSlamApi.defaults.adapter = async (config) => {
+      expect(config.url).toBe('/bindings')
+      expect(config.method).toBe('post')
+      expect(JSON.parse(String(config.data))).toEqual({
+        spaceId: 701,
+        verseIds: ['101', '102'],
+      })
+
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: { spaceId: 701, verseIds: [101, 102] },
+        headers: {},
+        config,
+      }
+    }
+
+    await expect(createSceneBindings({ spaceId: 701, verseIds: ['101', '102'] })).resolves.toEqual({
+      spaceId: 701,
+      verseIds: [101, 102],
+    })
   })
 
   it('treats a missing binding endpoint as no binding records while backend catches up', async () => {
