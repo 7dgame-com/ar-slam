@@ -11,6 +11,7 @@ const apiMock = vi.hoisted(() => ({
   fetchVerseScenes: vi.fn(),
   fetchExistingSpaces: vi.fn(),
   deleteSpaceRecord: vi.fn(),
+  updateSpaceRecord: vi.fn(),
   fetchSceneBindings: vi.fn(),
   createSceneBindings: vi.fn(),
   deleteSceneBinding: vi.fn(),
@@ -27,6 +28,7 @@ vi.mock('../api', () => ({
   fetchVerseScenes: apiMock.fetchVerseScenes,
   fetchExistingSpaces: apiMock.fetchExistingSpaces,
   deleteSpaceRecord: apiMock.deleteSpaceRecord,
+  updateSpaceRecord: apiMock.updateSpaceRecord,
   fetchSceneBindings: apiMock.fetchSceneBindings,
   createSceneBindings: apiMock.createSceneBindings,
   deleteSceneBinding: apiMock.deleteSceneBinding,
@@ -134,6 +136,7 @@ describe('WorkbenchView', () => {
     apiMock.fetchVerseScenes.mockReset()
     apiMock.fetchExistingSpaces.mockReset()
     apiMock.deleteSpaceRecord.mockReset()
+    apiMock.updateSpaceRecord.mockReset()
     apiMock.fetchSceneBindings.mockReset()
     apiMock.createSceneBindings.mockReset()
     apiMock.deleteSceneBinding.mockReset()
@@ -169,6 +172,7 @@ describe('WorkbenchView', () => {
       modelName: 'space-a.glb',
     }])
     apiMock.deleteSpaceRecord.mockResolvedValue('')
+    apiMock.updateSpaceRecord.mockResolvedValue({ id: 801, name: 'A 馆定位包 v2' })
     apiMock.fetchSceneBindings.mockResolvedValue([])
     apiMock.deleteSceneBinding.mockResolvedValue({ code: 0 })
     apiMock.createSceneBindings.mockResolvedValue({
@@ -231,6 +235,23 @@ describe('WorkbenchView', () => {
     expect(wrapper.text()).toContain('"spaceId": 701')
   })
 
+  it('uploads the provider-cleaned ZIP returned by the parser', async () => {
+    const cleanZipFile = new File(['clean zip'], 'room.zip', { type: 'application/zip' })
+    parserMock.parseScanPackage.mockResolvedValue({
+      ...parsedPackage(),
+      cleanZipFile,
+    } as ParsedScanPackage & { cleanZipFile: File })
+    const wrapper = mountWorkbench()
+
+    const originalFile = await uploadFile(wrapper, 'room.zip')
+    await wrapper.find('[data-test="glb-preview"]').trigger('click')
+    await flushAsync(wrapper)
+
+    const uploadParams = uploadMock.uploadScanPackageToMain.mock.calls[0]?.[0] as { sourceFile: File }
+    expect(uploadParams.sourceFile).toBe(cleanZipFile)
+    expect(uploadParams.sourceFile).not.toBe(originalFile)
+  })
+
   it('lists reusable spaces and binds selected scenes with a previous space without uploading again', async () => {
     const wrapper = mountWorkbench()
 
@@ -241,7 +262,10 @@ describe('WorkbenchView', () => {
     expect(wrapper.text()).toContain('zip-md5-a')
     expect(wrapper.find('[data-test="space-thumbnail-801"]').attributes('src')).toBe('https://cdn.example.com/spaces/a.png')
 
+    expect(wrapper.find('[data-test="delete-space-801"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="edit-space-801"]').exists()).toBe(true)
     await wrapper.find('[data-test="space-801"]').trigger('click')
+    expect(wrapper.find('[data-test="space-modal-801"]').exists()).toBe(false)
     expect(wrapper.find('[data-test="glb-preview"]').attributes('data-model-url')).toBe('https://cdn.example.com/spaces/space-a.glb')
     expect(wrapper.text()).toContain('space-a.glb')
 
@@ -258,6 +282,46 @@ describe('WorkbenchView', () => {
     })
     expect(wrapper.text()).toContain('Binding Result')
     expect(wrapper.text()).toContain('"spaceId": 801')
+  })
+
+  it('opens a management modal for an existing space and renames it', async () => {
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+    await wrapper.find('[data-test="edit-space-801"]').trigger('click')
+
+    expect(wrapper.find('[data-test="space-modal-801"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="use-space-801"]').exists()).toBe(false)
+    const nameInput = wrapper.find<HTMLInputElement>('[data-test="space-name-input-801"]')
+    expect(nameInput.element.value).toBe('A 馆定位包')
+
+    await nameInput.setValue('A 馆定位包 v2')
+    await wrapper.find('[data-test="save-space-801"]').trigger('click')
+    await flushAsync(wrapper)
+
+    expect(apiMock.updateSpaceRecord).toHaveBeenCalledWith(801, { name: 'A 馆定位包 v2' })
+    expect(wrapper.find('[data-test="space-modal-801"]').exists()).toBe(false)
+    expect(wrapper.find('[data-test="space-801"]').text()).toContain('A 馆定位包 v2')
+  })
+
+  it('refreshes scene binding space names after renaming a space', async () => {
+    apiMock.fetchSceneBindings
+      .mockResolvedValueOnce([{ sceneId: '101', spaceId: '801', spaceName: 'A 馆定位包' }])
+      .mockResolvedValueOnce([{ sceneId: '101', spaceId: '801', spaceName: 'A 馆定位包 v2' }])
+    const wrapper = mountWorkbench()
+
+    await flushAsync(wrapper)
+    expect(wrapper.find('[data-test="scene-101"]').text()).toContain('A 馆定位包')
+
+    await wrapper.find('[data-test="edit-space-801"]').trigger('click')
+    await wrapper.find<HTMLInputElement>('[data-test="space-name-input-801"]').setValue('A 馆定位包 v2')
+    await wrapper.find('[data-test="save-space-801"]').trigger('click')
+    await flushAsync(wrapper)
+    await flushAsync(wrapper)
+
+    expect(apiMock.updateSpaceRecord).toHaveBeenCalledWith(801, { name: 'A 馆定位包 v2' })
+    expect(apiMock.fetchVerseScenes).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-test="scene-101"]').text()).toContain('A 馆定位包 v2')
   })
 
   it('confirms deletion inline and clears the preview and binding target', async () => {
@@ -288,14 +352,16 @@ describe('WorkbenchView', () => {
     expect(wrapper.find('[data-test="scene-101"]').attributes('aria-disabled')).toBe('true')
     expect(wrapper.find('[data-test="unbind-101"]').exists()).toBe(true)
 
-    await wrapper.find('[data-test="delete-space-801"]').trigger('click')
+    expect(wrapper.find('[data-test="delete-space-801"]').exists()).toBe(false)
+    await wrapper.find('[data-test="edit-space-801"]').trigger('click')
+    await wrapper.find('[data-test="modal-delete-space-801"]').trigger('click')
     await flushAsync(wrapper)
 
     expect(confirmSpy).not.toHaveBeenCalled()
     expect(apiMock.deleteSpaceRecord).not.toHaveBeenCalled()
-    expect(wrapper.find('[data-test="confirm-delete-space-801"]').exists()).toBe(true)
+    expect(wrapper.find('[data-test="modal-confirm-delete-space-801"]').exists()).toBe(true)
 
-    await wrapper.find('[data-test="confirm-delete-space-801"]').trigger('click')
+    await wrapper.find('[data-test="modal-confirm-delete-space-801"]').trigger('click')
     await flushAsync(wrapper)
 
     expect(apiMock.deleteSpaceRecord).toHaveBeenCalledWith(801)
@@ -408,8 +474,12 @@ describe('WorkbenchView', () => {
     await wrapper.find('[data-test="glb-preview"]').trigger('click')
     await flushAsync(wrapper)
 
-    expect(wrapper.text()).toContain('Uploading room/model.glb')
-    expect(wrapper.text()).toContain('45%')
+    const progress = wrapper.find('[data-test="upload-progress"]')
+    expect(progress.exists()).toBe(true)
+    expect(progress.text()).toContain('Uploading room/model.glb')
+    expect(progress.text()).toContain('45%')
+    expect(progress.element.closest('.scan-upload-panel')).not.toBeNull()
+    expect(progress.element.closest('.scene-binding-panel')).toBeNull()
 
     upload.resolve({
       spaceId: 701,
@@ -432,7 +502,9 @@ describe('WorkbenchView', () => {
 
     await flushAsync(wrapper)
     expect(wrapper.find('[data-test="unbind-101"]').exists()).toBe(true)
-    expect(wrapper.text()).not.toContain('旧定位包')
+    const boundScene = wrapper.find('[data-test="scene-101"]')
+    expect(boundScene.classes()).toContain('bound')
+    expect(boundScene.text()).toContain('旧定位包')
 
     await uploadFile(wrapper, 'room.zip')
     await wrapper.find('[data-test="scene-101"]').trigger('click')

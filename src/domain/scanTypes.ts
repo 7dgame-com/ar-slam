@@ -33,6 +33,7 @@ export interface ManifestSummary {
 export interface ParsedScanPackage {
   id: string
   zipMd5: string
+  originalZipMd5?: string
   zipName: string
   provider: ConcreteLocalizationProvider | null
   files: ScanFileRef[]
@@ -43,6 +44,7 @@ export interface ParsedScanPackage {
   errors: string[]
   needsManualSelection: boolean
   modelBlobUrl: string | null
+  cleanZipFile?: File
 }
 
 export interface SceneOption {

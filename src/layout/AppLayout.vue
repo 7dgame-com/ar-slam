@@ -37,22 +37,6 @@
         </button>
         <h1 class="navbar-title">{{ navbarTitle }}</h1>
         <div class="navbar-spacer" />
-        <label class="language-switcher" :aria-label="$t('common.language')">
-          <select
-            v-model="currentLocale"
-            class="language-select"
-            data-test="language-select"
-            :aria-label="$t('common.language')"
-          >
-            <option
-              v-for="option in LANGUAGE_OPTIONS"
-              :key="option.value"
-              :value="option.value"
-            >
-              {{ option.label }}
-            </option>
-          </select>
-        </label>
         <div v-if="userInfo" class="user-info">
           <el-icon><User /></el-icon>
           <span>{{ userInfo.nickname || userInfo.username }}</span>
@@ -79,23 +63,15 @@ import { useI18n } from 'vue-i18n'
 import { Close, User, Fold, Location, Loading } from '@element-plus/icons-vue'
 import { useAuthSession } from '../composables/useAuthSession'
 import { usePermissions } from '../composables/usePermissions'
-import { LANGUAGE_OPTIONS, setPluginLocale, type SupportedLocale } from '../i18n'
 
 const { user } = useAuthSession()
 const { fetchPermissions, can, hasAny, loaded } = usePermissions()
 const route = useRoute()
-const { locale, t } = useI18n()
+const { t } = useI18n()
 
 const sidebarOpen = ref(false)
 const userInfo = computed(() => user.value)
 const ready = ref(false)
-const currentLocale = computed<SupportedLocale>({
-  get: () => locale.value as SupportedLocale,
-  set: (value) => {
-    locale.value = value
-    setPluginLocale(value)
-  },
-})
 const navbarTitle = computed(() => {
   if (typeof route.meta.titleKey === 'string') {
     return t(route.meta.titleKey)
@@ -254,31 +230,6 @@ onMounted(async () => {
 
 .navbar-spacer {
   flex: 1;
-}
-
-.language-switcher {
-  display: flex;
-  align-items: center;
-}
-
-.language-select {
-  height: 32px;
-  min-width: 116px;
-  padding: 0 28px 0 10px;
-  border: 1px solid var(--border-color);
-  border-radius: var(--radius-sm);
-  background: var(--bg-card);
-  color: var(--text-secondary);
-  font: inherit;
-  font-size: var(--font-size-sm);
-  cursor: pointer;
-}
-
-.language-select:hover,
-.language-select:focus {
-  border-color: var(--primary-color);
-  color: var(--text-primary);
-  outline: none;
 }
 
 .user-info {

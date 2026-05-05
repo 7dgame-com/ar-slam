@@ -14,6 +14,9 @@
           :parse-error="parseError"
           :upload-notice="uploadNotice"
           :is-parsing="isParsing"
+          :is-uploading="isUploadingPackage"
+          :upload-stage="uploadStage"
+          :upload-progress="uploadProgress"
           @upload="handleUpload"
           @provider-change="handleProviderChange"
         />
@@ -23,8 +26,10 @@
           :error="spacesError"
           :selected-space-id="selectedSpaceId"
           :deleting-space-id="deletingSpaceId"
+          :updating-space-id="updatingSpaceId"
           @select-space="handleSelectExistingSpace"
           @delete-space="handleDeleteExistingSpace"
+          @update-space-name="handleUpdateSpaceName"
           @refresh="loadExistingSpaces"
         />
       </el-card>
@@ -53,8 +58,6 @@
           :can-submit-binding="canSubmitSceneBinding"
           :submitting="isSubmittingBinding"
           :unbinding-scene-id="unbindingSceneId"
-          :upload-stage="uploadStage"
-          :upload-progress="uploadProgress"
           :binding-result="bindingResult"
           @toggle-scene="toggleSceneSelection"
           @page-change="loadScenes"
@@ -78,6 +81,7 @@ import {
   fetchExistingSpaces,
   fetchSceneBindings,
   fetchVerseScenes,
+  updateSpaceRecord,
 } from '../api'
 import ExistingSpacePanel from '../components/ExistingSpacePanel.vue'
 import GlbPreview from '../components/GlbPreview.vue'
@@ -116,6 +120,7 @@ const spacesError = ref('')
 const selectedSpaceId = ref<number | null>(null)
 const selectedExistingSpace = ref<ExistingSpaceOption | null>(null)
 const deletingSpaceId = ref<number | null>(null)
+const updatingSpaceId = ref<number | null>(null)
 const scenesLoading = ref(false)
 const scenesError = ref('')
 const sceneSearch = ref('')
@@ -193,6 +198,33 @@ function rememberUploadedSpace(result: UploadedScanPackage) {
 
   localUploadedSpaces.value = mergeExistingSpaces([localSpace], localUploadedSpaces.value)
   existingSpaces.value = mergeExistingSpaces(existingSpaces.value)
+}
+
+function withRenamedSpace(spaces: ExistingSpaceOption[], spaceId: number, spaceName: string) {
+  return spaces.map((space) => (
+    space.spaceId === spaceId
+      ? { ...space, spaceName }
+      : space
+  ))
+}
+
+function renameSpaceLocally(spaceId: number, spaceName: string) {
+  existingSpaces.value = withRenamedSpace(existingSpaces.value, spaceId, spaceName)
+  localUploadedSpaces.value = withRenamedSpace(localUploadedSpaces.value, spaceId, spaceName)
+
+  if (selectedExistingSpace.value?.spaceId === spaceId) {
+    selectedExistingSpace.value = {
+      ...selectedExistingSpace.value,
+      spaceName,
+    }
+  }
+
+  if (uploadedPackage.value?.spaceId === spaceId) {
+    uploadedPackage.value = {
+      ...uploadedPackage.value,
+      spaceName,
+    }
+  }
 }
 
 async function loadExistingSpaces(): Promise<ExistingSpaceOption[]> {
@@ -280,6 +312,28 @@ async function handleDeleteExistingSpace(space: ExistingSpaceOption) {
       : 'Space could not be deleted.'
   } finally {
     deletingSpaceId.value = null
+  }
+}
+
+async function handleUpdateSpaceName(space: ExistingSpaceOption, name: string) {
+  if (updatingSpaceId.value) return
+
+  updatingSpaceId.value = space.spaceId
+  spacesError.value = ''
+  uploadNotice.value = ''
+
+  try {
+    const updated = await updateSpaceRecord(space.spaceId, { name })
+    const nextName = updated.name || name
+    renameSpaceLocally(space.spaceId, nextName)
+    uploadNotice.value = `Updated space: ${nextName}.`
+    await refreshScenes()
+  } catch (error) {
+    spacesError.value = error instanceof Error && error.message
+      ? error.message
+      : 'Space could not be updated.'
+  } finally {
+    updatingSpaceId.value = null
   }
 }
 
@@ -419,7 +473,7 @@ async function uploadCurrentPackage() {
     }
 
     const result = await uploadScanPackageToMain({
-      sourceFile: currentFile.value,
+      sourceFile: parsedPackage.value.cleanZipFile ?? currentFile.value,
       parsedPackage: parsedPackage.value,
       thumbnailBlob,
       onProgress: (progress) => {
@@ -477,6 +531,11 @@ async function parseCurrentFile(file: File) {
 
     setParsedPackage(parsed)
     const existingSpace = findExistingSpaceByZipMd5(parsed.zipMd5, spaces)
+      ?? (
+        parsed.originalZipMd5 && parsed.originalZipMd5 !== parsed.zipMd5
+          ? findExistingSpaceByZipMd5(parsed.originalZipMd5, spaces)
+          : undefined
+      )
     if (existingSpace) {
       handleSelectExistingSpace(
         existingSpace,

@@ -29,7 +29,11 @@
         v-for="scene in scenes"
         :key="scene.id"
         class="scene-button"
-        :class="{ active: selectedSceneIds.includes(scene.id), disabled: Boolean(scene.boundSpaceId) }"
+        :class="{
+          active: selectedSceneIds.includes(scene.id),
+          bound: Boolean(scene.boundSpaceId),
+          disabled: Boolean(scene.boundSpaceId),
+        }"
         :data-test="`scene-${scene.id}`"
         :aria-disabled="Boolean(scene.boundSpaceId)"
         role="button"
@@ -47,7 +51,16 @@
           >
           <span v-else :data-test="`scene-thumbnail-${scene.id}`">{{ scene.name.slice(0, 1) || '#' }}</span>
         </div>
-        <strong>{{ scene.name }}</strong>
+        <div class="scene-copy">
+          <strong>{{ scene.name }}</strong>
+          <span
+            v-if="scene.boundSpaceId"
+            class="bound-space-name"
+            :data-test="`bound-space-${scene.id}`"
+          >
+            Space: {{ scene.boundSpaceName || `Space ${scene.boundSpaceId}` }}
+          </span>
+        </div>
         <button
           v-if="scene.boundSpaceId"
           type="button"
@@ -92,11 +105,6 @@
       {{ submitting ? 'Binding' : loading ? 'Loading scenes' : 'Bind' }}
     </button>
 
-    <div v-if="submitting || uploadStage" class="upload-progress" data-test="upload-progress">
-      <span>{{ uploadStage || 'Preparing upload' }}</span>
-      <strong>{{ uploadProgress }}%</strong>
-    </div>
-
     <pre v-if="bindingResult" class="draft-json">Binding Result
 {{ JSON.stringify(bindingResult, null, 2) }}</pre>
   </section>
@@ -117,8 +125,6 @@ defineProps<{
   canSubmitBinding: boolean
   submitting: boolean
   unbindingSceneId: string
-  uploadStage: string
-  uploadProgress: number
   bindingResult: BindingResult | null
 }>()
 
@@ -203,8 +209,18 @@ function handleSceneClick(scene: SceneOption) {
   background: var(--primary-light);
 }
 
+.scene-button.bound {
+  border-color: var(--success-color);
+  background: var(--success-light);
+}
+
 .scene-button.disabled {
   cursor: default;
+}
+
+.scene-button.bound .scene-thumbnail {
+  background: var(--bg-card);
+  color: var(--success-color);
 }
 
 .scene-thumbnail {
@@ -225,9 +241,27 @@ function handleSceneClick(scene: SceneOption) {
   object-fit: cover;
 }
 
-.scene-button strong {
+.scene-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.scene-copy strong {
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bound-space-name {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--success-color);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -253,18 +287,6 @@ function handleSceneClick(scene: SceneOption) {
 .draft-button:disabled {
   background: var(--text-placeholder);
   cursor: not-allowed;
-}
-
-.upload-progress {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 12px;
-  border-radius: var(--radius-sm);
-  background: var(--primary-light);
-  color: var(--text-primary);
-  font-size: var(--font-size-sm);
 }
 
 .secondary-button {

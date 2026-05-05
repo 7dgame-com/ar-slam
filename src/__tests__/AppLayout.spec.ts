@@ -110,7 +110,7 @@ describe('AppLayout', () => {
     expect(wrapper.text()).toContain('permission.noPermission')
   })
 
-  it('lets users switch between the five supported languages', async () => {
+  it('does not render an in-plugin language switcher', async () => {
     apiMock.verifyCurrentToken.mockResolvedValue({
       id: 'u-1',
       username: 'operator',
@@ -120,16 +120,7 @@ describe('AppLayout', () => {
     const wrapper = await mountLocalizedLayout()
     await flushAsync()
 
-    const languageSelect = wrapper.find<HTMLSelectElement>('[data-test="language-select"]')
-
-    expect(languageSelect.exists()).toBe(true)
-    expect(languageSelect.findAll('option')).toHaveLength(5)
+    expect(wrapper.find('[data-test="language-select"]').exists()).toBe(false)
     expect(wrapper.text()).toContain('定位工作台')
-
-    await languageSelect.setValue('en-US')
-    await wrapper.vm.$nextTick()
-
-    expect(i18n.global.locale.value).toBe('en-US')
-    expect(wrapper.text()).toContain('Localization Workbench')
   })
 })

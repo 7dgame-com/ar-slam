@@ -51,7 +51,14 @@ async function blobMd5(blob: Blob): Promise<string> {
   return SparkMD5.ArrayBuffer.hash(buffer)
 }
 
-function parsedPackage(): ParsedScanPackage {
+async function zipEntries(blob: Blob): Promise<string[]> {
+  const zip = await JSZip.loadAsync(blob)
+  return Object.values(zip.files)
+    .filter((entry) => !entry.dir)
+    .map((entry) => entry.name)
+}
+
+function parsedPackage(overrides: Partial<ParsedScanPackage> = {}): ParsedScanPackage {
   const modelFile = {
     path: 'room/model.glb',
     name: 'model.glb',
@@ -79,6 +86,7 @@ function parsedPackage(): ParsedScanPackage {
     errors: [],
     needsManualSelection: false,
     modelBlobUrl: 'blob:model',
+    ...overrides,
   }
 }
 
@@ -94,14 +102,12 @@ describe('main resource upload service', () => {
     cosMock.existingKeys.clear()
   })
 
-  it('uploads extracted scan files with content-addressed keys, stores the screenshot outside the zip directory, and creates a space', async () => {
+  it('uploads only mesh.glb, file.zip, and image.png under the content-addressed space directory', async () => {
     const sourceFile = await zipFile('room.zip', {
       'room/model.glb': new Uint8Array([1, 2, 3]),
       'room/map.bytes': new Uint8Array([4, 5, 6]),
     })
-    const zipMd5 = await blobMd5(sourceFile)
-    const modelMd5 = await blobMd5(new Blob([new Uint8Array([1, 2, 3])]))
-    const mapMd5 = await blobMd5(new Blob([new Uint8Array([4, 5, 6])]))
+    const zipMd5 = 'content-md5-from-retained-files'
     const filePayloads: Array<Record<string, unknown>> = []
     const spacePayloads: Array<Record<string, unknown>> = []
     const nextFileIds = [11, 12, 13]
@@ -164,20 +170,24 @@ describe('main resource upload service', () => {
 
     const result = await uploadScanPackageToMain({
       sourceFile,
-      parsedPackage: parsedPackage(),
+      parsedPackage: parsedPackage({
+        id: zipMd5,
+        zipMd5,
+      }),
       thumbnailBlob: new Blob(['thumb'], { type: 'image/png' }),
       onProgress: vi.fn(),
     })
 
     expect(cosMock.uploadCalls.map((item) => item.Key)).toEqual([
-      `spaces/${zipMd5}/${modelMd5}.glb`,
-      `spaces/${zipMd5}/${mapMd5}.bytes`,
-      `spaces/${zipMd5}.png`,
+      `spaces/${zipMd5}/mesh.glb`,
+      `spaces/${zipMd5}/file.zip`,
+      `spaces/${zipMd5}/image.png`,
     ])
+    await expect(zipEntries(cosMock.uploadCalls[1].Body)).resolves.toEqual(['room/map.bytes'])
     expect(filePayloads.map((item) => item.filename)).toEqual([
-      `${modelMd5}.glb`,
-      `${mapMd5}.bytes`,
-      `${zipMd5}.png`,
+      'mesh.glb',
+      'file.zip',
+      'image.png',
     ])
     expect(filePayloads.every((item) => typeof item.md5 === 'string' && item.md5.length === 32)).toBe(true)
     expect(spacePayloads).toHaveLength(1)
@@ -193,7 +203,7 @@ describe('main resource upload service', () => {
       zipMd5,
       zipName: 'room.zip',
       cosPrefix: `spaces/${zipMd5}`,
-      screenshotKey: `spaces/${zipMd5}.png`,
+      screenshotKey: `spaces/${zipMd5}/image.png`,
       primaryLocalizationFileId: 12,
       modelFileId: 11,
       thumbnailFileId: 13,
@@ -201,21 +211,24 @@ describe('main resource upload service', () => {
     })
     expect(spacePayloads[0].data.files).toEqual(expect.arrayContaining([
       expect.objectContaining({
-        path: 'room/model.glb',
-        filename: `${modelMd5}.glb`,
+        path: 'mesh.glb',
+        filename: 'mesh.glb',
         originalName: 'model.glb',
-        key: `spaces/${zipMd5}/${modelMd5}.glb`,
+        key: `spaces/${zipMd5}/mesh.glb`,
       }),
       expect.objectContaining({
-        path: 'room/map.bytes',
-        filename: `${mapMd5}.bytes`,
-        originalName: 'map.bytes',
-        key: `spaces/${zipMd5}/${mapMd5}.bytes`,
+        path: 'file.zip',
+        filename: 'file.zip',
+        key: `spaces/${zipMd5}/file.zip`,
+        entries: [expect.objectContaining({
+          path: 'room/map.bytes',
+          originalName: 'map.bytes',
+        })],
       }),
       expect.objectContaining({
-        path: 'screenshot',
-        filename: `${zipMd5}.png`,
-        key: `spaces/${zipMd5}.png`,
+        path: 'image.png',
+        filename: 'image.png',
+        key: `spaces/${zipMd5}/image.png`,
       }),
     ]))
     expect(result).toMatchObject({
@@ -229,16 +242,14 @@ describe('main resource upload service', () => {
     })
   })
 
-  it('reuses existing COS objects for content-addressed extracted files', async () => {
+  it('reuses existing COS objects for the fixed mesh/file/image keys', async () => {
     const sourceFile = await zipFile('room.zip', {
       'room/model.glb': new Uint8Array([1, 2, 3]),
       'room/map.bytes': new Uint8Array([4, 5, 6]),
     })
-    const zipMd5 = await blobMd5(sourceFile)
-    const modelMd5 = await blobMd5(new Blob([new Uint8Array([1, 2, 3])]))
-    const mapMd5 = await blobMd5(new Blob([new Uint8Array([4, 5, 6])]))
+    const zipMd5 = 'content-md5-from-retained-files'
     let nextFileId = 20
-    cosMock.existingKeys.add(`spaces/${zipMd5}/${mapMd5}.bytes`)
+    cosMock.existingKeys.add(`spaces/${zipMd5}/file.zip`)
 
     mainApi.defaults.adapter = async (config) => {
       if (config.method === 'get' && config.url === '/tencent-cloud/cloud') {
@@ -292,13 +303,16 @@ describe('main resource upload service', () => {
 
     await uploadScanPackageToMain({
       sourceFile,
-      parsedPackage: parsedPackage(),
+      parsedPackage: parsedPackage({
+        id: zipMd5,
+        zipMd5,
+      }),
       thumbnailBlob: new Blob(['thumb'], { type: 'image/png' }),
     })
 
     expect(cosMock.uploadCalls.map((item) => item.Key)).toEqual([
-      `spaces/${zipMd5}/${modelMd5}.glb`,
-      `spaces/${zipMd5}.png`,
+      `spaces/${zipMd5}/mesh.glb`,
+      `spaces/${zipMd5}/image.png`,
     ])
   })
 })

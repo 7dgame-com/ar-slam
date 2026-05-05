@@ -8,6 +8,7 @@ import {
   fetchSceneBindings,
   fetchVerseScenes,
   mainApi,
+  updateSpaceRecord,
 } from '../api'
 
 describe('scene api', () => {
@@ -232,6 +233,27 @@ describe('scene api', () => {
     }
 
     await expect(deleteSpaceRecord(701)).resolves.toBe('')
+  })
+
+  it('updates a reusable space name on the main backend', async () => {
+    mainApi.defaults.adapter = async (config) => {
+      expect(config.url).toBe('/spaces/701')
+      expect(config.method).toBe('patch')
+      expect(JSON.parse(String(config.data))).toEqual({ name: 'A 馆定位包 v2' })
+
+      return {
+        status: 200,
+        statusText: 'OK',
+        data: { id: 701, name: 'A 馆定位包 v2' },
+        headers: {},
+        config,
+      }
+    }
+
+    await expect(updateSpaceRecord(701, { name: 'A 馆定位包 v2' })).resolves.toEqual({
+      id: 701,
+      name: 'A 馆定位包 v2',
+    })
   })
 
   it('treats a missing binding endpoint as no binding records while backend catches up', async () => {

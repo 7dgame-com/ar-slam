@@ -33,6 +33,17 @@
       <p>{{ uploadNotice }}</p>
     </div>
 
+    <div v-if="isUploading || uploadStage" class="upload-progress" data-test="upload-progress">
+      <div class="upload-progress-copy">
+        <span>Upload progress</span>
+        <strong>{{ uploadStage || 'Preparing upload' }}</strong>
+      </div>
+      <div class="upload-progress-meter" aria-hidden="true">
+        <span :style="{ width: `${uploadProgress}%` }" />
+      </div>
+      <small>{{ uploadProgress }}%</small>
+    </div>
+
     <div v-if="parsedPackage" class="package-summary">
       <h3>{{ parsedPackage.zipName }}</h3>
       <p>{{ parsedPackage.provider || 'Provider needs selection' }}</p>
@@ -62,6 +73,9 @@ defineProps<{
   parseError: string
   uploadNotice: string
   isParsing: boolean
+  isUploading: boolean
+  uploadStage: string
+  uploadProgress: number
 }>()
 
 const emit = defineEmits<{
@@ -177,5 +191,55 @@ function onProviderChange(event: Event) {
 .notice.error {
   background: #fff1f0;
   color: #a8071a;
+}
+
+.upload-progress {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--primary-color) 24%, var(--border-color));
+  border-radius: var(--radius-sm);
+  background: var(--primary-light);
+  color: var(--text-primary);
+}
+
+.upload-progress-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.upload-progress-copy span,
+.upload-progress small {
+  color: var(--text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+.upload-progress-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.upload-progress-meter {
+  grid-column: 1 / -1;
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.upload-progress-meter span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--primary-color);
+  transition: width 160ms ease;
 }
 </style>

@@ -18,6 +18,8 @@ import type {
 } from '../domain/scanTypes'
 import { blobMd5 } from '../utils/blobMd5'
 
+const BUNDLE_ZIP_ENTRY_DATE = new Date(Date.UTC(1980, 0, 1, 0, 0, 0))
+
 export interface UploadProgressState {
   stage: string
   percent: number
@@ -38,6 +40,7 @@ interface CosHandler {
 
 interface UploadCandidate {
   path: string
+  sourcePath?: string
   originalName?: string
   filename: string
   role: ScanFileRole
@@ -45,10 +48,20 @@ interface UploadCandidate {
   blob: Blob
   mimeType: string
   md5?: string
+  entries?: UploadedArchiveEntry[]
+}
+
+interface UploadedArchiveEntry {
+  path: string
+  originalName: string
+  role: ScanFileRole
+  md5: string
+  size: number
 }
 
 interface UploadedFileMapping {
   path: string
+  sourcePath?: string
   originalName?: string
   filename: string
   role: ScanFileRole
@@ -57,6 +70,7 @@ interface UploadedFileMapping {
   url: string
   md5: string
   size: number
+  entries?: UploadedArchiveEntry[]
 }
 
 function emitProgress(
@@ -130,6 +144,7 @@ function contentTypeFor(filename: string, fallback = 'application/octet-stream')
   if (lower.endsWith('.png')) return 'image/png'
   if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg'
   if (lower.endsWith('.webp')) return 'image/webp'
+  if (lower.endsWith('.zip')) return 'application/zip'
   return fallback
 }
 
@@ -208,42 +223,96 @@ function uniqueFileRefs(files: ScanFileRef[]): ScanFileRef[] {
   return Array.from(new Map(files.map((file) => [file.path, file])).values())
 }
 
-function extensionSuffix(filename: string): string {
-  const cleanName = filename.split(/[?#]/)[0] || filename
-  const dot = cleanName.lastIndexOf('.')
-  return dot >= 0 ? cleanName.slice(dot).toLowerCase() : ''
+async function readZipEntry(
+  zip: JSZip,
+  fileRef: ScanFileRef,
+): Promise<{ safePath: string; bytes: Uint8Array; blob: Blob }> {
+  const safePath = safePathPart(fileRef.path)
+  const entry = zip.file(fileRef.path) ?? zip.file(safePath)
+  if (!entry) {
+    throw new Error(`Package file is missing from zip: ${fileRef.path}`)
+  }
+
+  const bytes = await entry.async('uint8array')
+  const blob = await entry.async('blob')
+  return {
+    safePath,
+    bytes,
+    blob: blob.slice(0, blob.size, contentTypeFor(fileRef.name)),
+  }
 }
 
-async function buildZipCandidates(
+function isGlbFile(fileRef: ScanFileRef): boolean {
+  return fileRef.extension.toLowerCase() === 'glb' || fileRef.role === 'model'
+}
+
+async function buildMeshCandidate(
   zip: JSZip,
   parsedPackage: ParsedScanPackage,
   cosPrefix: string,
-): Promise<UploadCandidate[]> {
-  const candidates: UploadCandidate[] = []
+): Promise<UploadCandidate> {
+  if (!parsedPackage.modelFile) {
+    throw new Error('A GLB model file is required before upload.')
+  }
 
-  for (const fileRef of uniqueFileRefs(parsedPackage.files)) {
-    const safePath = safePathPart(fileRef.path)
-    const entry = zip.file(fileRef.path) ?? zip.file(safePath)
-    if (!entry) {
-      throw new Error(`Package file is missing from zip: ${fileRef.path}`)
-    }
+  const { safePath, blob } = await readZipEntry(zip, parsedPackage.modelFile)
 
-    const blob = await entry.async('blob')
-    const md5 = await blobMd5(blob)
-    const filename = `${md5}${extensionSuffix(fileRef.name)}`
-    candidates.push({
+  return {
+    path: 'mesh.glb',
+    sourcePath: safePath,
+    originalName: parsedPackage.modelFile.name,
+    filename: 'mesh.glb',
+    role: 'model',
+    key: `${cosPrefix}/mesh.glb`,
+    blob,
+    mimeType: 'model/gltf-binary',
+    md5: await blobMd5(blob),
+  }
+}
+
+async function buildFileZipCandidate(
+  zip: JSZip,
+  parsedPackage: ParsedScanPackage,
+  cosPrefix: string,
+): Promise<UploadCandidate> {
+  const archiveFiles = uniqueFileRefs(parsedPackage.files).filter((fileRef) => !isGlbFile(fileRef))
+  if (archiveFiles.length === 0) {
+    throw new Error('At least one non-GLB localization data file is required before upload.')
+  }
+
+  const fileZip = new JSZip()
+  const entries: UploadedArchiveEntry[] = []
+
+  for (const fileRef of archiveFiles) {
+    const { safePath, bytes, blob } = await readZipEntry(zip, fileRef)
+    entries.push({
       path: safePath,
       originalName: fileRef.name,
-      filename,
       role: fileRef.role,
-      key: `${cosPrefix}/${filename}`,
-      blob,
-      mimeType: contentTypeFor(fileRef.name),
-      md5,
+      md5: await blobMd5(blob),
+      size: bytes.byteLength,
+    })
+    fileZip.file(safePath, bytes, {
+      date: BUNDLE_ZIP_ENTRY_DATE,
     })
   }
 
-  return candidates
+  const archiveBlob = await fileZip.generateAsync({
+    type: 'blob',
+    compression: 'DEFLATE',
+    compressionOptions: { level: 9 },
+  })
+
+  return {
+    path: 'file.zip',
+    filename: 'file.zip',
+    role: 'localization',
+    key: `${cosPrefix}/file.zip`,
+    blob: archiveBlob,
+    mimeType: 'application/zip',
+    md5: await blobMd5(archiveBlob),
+    entries,
+  }
 }
 
 async function createUploadedFileRecord(
@@ -263,6 +332,7 @@ async function createUploadedFileRecord(
 
   return {
     path: candidate.path,
+    sourcePath: candidate.sourcePath,
     originalName: candidate.originalName,
     filename: candidate.filename,
     role: candidate.role,
@@ -271,6 +341,7 @@ async function createUploadedFileRecord(
     url: url || objectUrl(handler.bucket, handler.region, candidate.key),
     md5,
     size: candidate.blob.size,
+    entries: candidate.entries,
   }
 }
 
@@ -290,21 +361,23 @@ export async function uploadScanPackageToMain({
     throw new Error('At least one localization data file is required before upload.')
   }
 
-  const zipMd5 = await blobMd5(sourceFile)
+  const uploadSourceFile = parsedPackage.cleanZipFile ?? sourceFile
+  const zipMd5 = parsedPackage.zipMd5
   const cosPrefix = `spaces/${zipMd5}`
   emitProgress(onProgress, 'Preparing upload', 1)
   const handler = await createCosHandler()
-  const zip = await JSZip.loadAsync(sourceFile)
-  const zipCandidates = await buildZipCandidates(zip, parsedPackage, cosPrefix)
+  const zip = await JSZip.loadAsync(uploadSourceFile)
+  const meshCandidate = await buildMeshCandidate(zip, parsedPackage, cosPrefix)
+  const fileZipCandidate = await buildFileZipCandidate(zip, parsedPackage, cosPrefix)
   const thumbnailCandidate: UploadCandidate = {
-    path: 'screenshot',
-    filename: `${zipMd5}.png`,
+    path: 'image.png',
+    filename: 'image.png',
     role: 'support',
-    key: `spaces/${zipMd5}.png`,
+    key: `${cosPrefix}/image.png`,
     blob: thumbnailBlob,
     mimeType: thumbnailBlob.type || 'image/png',
   }
-  const candidates = [...zipCandidates, thumbnailCandidate]
+  const candidates = [meshCandidate, fileZipCandidate, thumbnailCandidate]
   const uploadedFiles: UploadedFileMapping[] = []
 
   for (const [index, candidate] of candidates.entries()) {
@@ -314,16 +387,11 @@ export async function uploadScanPackageToMain({
   }
 
   const mappingByPath = new Map(uploadedFiles.map((file) => [file.path, file]))
-  const modelFile = mappingByPath.get(safePathPart(parsedPackage.modelFile.path))
-  const thumbnailFile = mappingByPath.get('screenshot')
-  const localizationFileIds = parsedPackage.localizationFiles.map((fileRef) => {
-    const uploadedFile = mappingByPath.get(safePathPart(fileRef.path))
-    if (!uploadedFile) {
-      throw new Error(`Localization file record was not created: ${fileRef.path}`)
-    }
-    return uploadedFile.fileId
-  })
-  const primaryLocalizationFileId = localizationFileIds[0]
+  const modelFile = mappingByPath.get('mesh.glb')
+  const fileZipFile = mappingByPath.get('file.zip')
+  const thumbnailFile = mappingByPath.get('image.png')
+  const localizationFileIds = fileZipFile ? [fileZipFile.fileId] : []
+  const primaryLocalizationFileId = fileZipFile?.fileId
 
   if (!modelFile || !thumbnailFile || !primaryLocalizationFileId) {
     throw new Error('Uploaded model, thumbnail, or localization file record is missing.')
@@ -342,6 +410,8 @@ export async function uploadScanPackageToMain({
       zipName: parsedPackage.zipName,
       cosPrefix,
       screenshotKey: thumbnailFile.key,
+      meshKey: modelFile.key,
+      fileKey: fileZipFile?.key,
       primaryLocalizationFileId,
       modelFileId: modelFile.fileId,
       thumbnailFileId: thumbnailFile.fileId,

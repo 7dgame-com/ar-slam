@@ -36,22 +36,96 @@
           <small>{{ space.provider || 'space' }}<template v-if="space.zipMd5"> / {{ space.zipMd5 }}</template></small>
         </span>
         <span class="space-actions">
-          <template v-if="confirmingSpaceId === space.spaceId">
+          <button
+            type="button"
+            class="secondary-button edit-button"
+            :data-test="`edit-space-${space.spaceId}`"
+            :disabled="deletingSpaceId === space.spaceId"
+            @click.stop="openSpaceModal(space)"
+          >
+            Edit
+          </button>
+        </span>
+      </div>
+
+      <p v-if="!loading && spaces.length === 0" class="empty-text">No spaces found</p>
+    </div>
+
+    <div
+      v-if="managingSpace"
+      class="space-modal-backdrop"
+      data-test="space-modal-backdrop"
+      @click.self="closeSpaceModal"
+    >
+      <div
+        class="space-modal"
+        role="dialog"
+        aria-modal="true"
+        :aria-labelledby="`space-modal-title-${managingSpace.spaceId}`"
+        :data-test="`space-modal-${managingSpace.spaceId}`"
+      >
+        <header class="space-modal-header">
+          <div>
+            <p class="space-modal-kicker">Space</p>
+            <h4 :id="`space-modal-title-${managingSpace.spaceId}`">{{ managingSpace.spaceName }}</h4>
+          </div>
+          <button type="button" class="icon-button" aria-label="Close" @click="closeSpaceModal">&times;</button>
+        </header>
+
+        <label class="field-label" :for="`space-name-${managingSpace.spaceId}`">Name</label>
+        <input
+          :id="`space-name-${managingSpace.spaceId}`"
+          v-model="draftSpaceName"
+          class="space-name-input"
+          type="text"
+          :data-test="`space-name-input-${managingSpace.spaceId}`"
+        >
+        <p v-if="modalError" class="error-text">{{ modalError }}</p>
+
+        <dl class="space-details">
+          <div>
+            <dt>Provider</dt>
+            <dd>{{ managingSpace.provider || 'space' }}</dd>
+          </div>
+          <div v-if="managingSpace.zipMd5">
+            <dt>ZIP MD5</dt>
+            <dd>{{ managingSpace.zipMd5 }}</dd>
+          </div>
+          <div v-if="managingSpace.modelName">
+            <dt>Model</dt>
+            <dd>{{ managingSpace.modelName }}</dd>
+          </div>
+          <div>
+            <dt>Localization files</dt>
+            <dd>{{ managingSpace.localizationFileIds.length }}</dd>
+          </div>
+        </dl>
+
+        <footer class="space-modal-actions">
+          <button
+            type="button"
+            class="primary-button"
+            :data-test="`save-space-${managingSpace.spaceId}`"
+            :disabled="!canSaveSpace || modalBusy"
+            @click="saveManagedSpace"
+          >
+            {{ updatingSpaceId === managingSpace.spaceId ? 'Saving' : 'Save' }}
+          </button>
+          <template v-if="confirmingModalDelete">
             <button
               type="button"
               class="delete-button confirm"
-              :data-test="`confirm-delete-space-${space.spaceId}`"
-              :disabled="deletingSpaceId === space.spaceId"
-              @click.stop="confirmDelete(space)"
+              :data-test="`modal-confirm-delete-space-${managingSpace.spaceId}`"
+              :disabled="modalBusy"
+              @click="deleteManagedSpace"
             >
-              {{ deletingSpaceId === space.spaceId ? 'Deleting' : 'Confirm' }}
+              {{ deletingSpaceId === managingSpace.spaceId ? 'Deleting' : 'Confirm delete' }}
             </button>
             <button
               type="button"
               class="cancel-button"
-              :data-test="`cancel-delete-space-${space.spaceId}`"
-              :disabled="deletingSpaceId === space.spaceId"
-              @click.stop="confirmingSpaceId = null"
+              :disabled="modalBusy"
+              @click="confirmingModalDelete = false"
             >
               Cancel
             </button>
@@ -60,43 +134,94 @@
             v-else
             type="button"
             class="delete-button"
-            :data-test="`delete-space-${space.spaceId}`"
-            :disabled="deletingSpaceId === space.spaceId"
-            @click.stop="confirmingSpaceId = space.spaceId"
+            :data-test="`modal-delete-space-${managingSpace.spaceId}`"
+            :disabled="modalBusy"
+            @click="confirmingModalDelete = true"
           >
             Delete
           </button>
-        </span>
+        </footer>
       </div>
-
-      <p v-if="!loading && spaces.length === 0" class="empty-text">No spaces found</p>
     </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { ExistingSpaceOption } from '../domain/scanTypes'
 
-defineProps<{
+const props = defineProps<{
   spaces: ExistingSpaceOption[]
   loading: boolean
   error: string
   selectedSpaceId: number | null
   deletingSpaceId: number | null
+  updatingSpaceId: number | null
 }>()
 
 const emit = defineEmits<{
   refresh: []
   selectSpace: [space: ExistingSpaceOption]
   deleteSpace: [space: ExistingSpaceOption]
+  updateSpaceName: [space: ExistingSpaceOption, name: string]
 }>()
 
-const confirmingSpaceId = ref<number | null>(null)
+const confirmingModalDelete = ref(false)
+const managingSpace = ref<ExistingSpaceOption | null>(null)
+const draftSpaceName = ref('')
+const modalError = ref('')
 
-function confirmDelete(space: ExistingSpaceOption) {
-  confirmingSpaceId.value = null
-  emit('deleteSpace', space)
+const trimmedDraftName = computed(() => draftSpaceName.value.trim())
+const modalBusy = computed(() => Boolean(
+  managingSpace.value
+    && (
+      props.deletingSpaceId === managingSpace.value.spaceId
+      || props.updatingSpaceId === managingSpace.value.spaceId
+    )
+))
+const canSaveSpace = computed(() => Boolean(
+  managingSpace.value
+    && trimmedDraftName.value
+    && trimmedDraftName.value !== managingSpace.value.spaceName
+))
+
+function openSpaceModal(space: ExistingSpaceOption) {
+  managingSpace.value = space
+  draftSpaceName.value = space.spaceName
+  confirmingModalDelete.value = false
+  modalError.value = ''
+}
+
+function closeSpaceModal() {
+  if (modalBusy.value) return
+
+  managingSpace.value = null
+  confirmingModalDelete.value = false
+  modalError.value = ''
+}
+
+function saveManagedSpace() {
+  if (!managingSpace.value || modalBusy.value) return
+
+  if (!trimmedDraftName.value) {
+    modalError.value = 'Space name is required.'
+    return
+  }
+
+  if (trimmedDraftName.value === managingSpace.value.spaceName) {
+    closeSpaceModal()
+    return
+  }
+
+  emit('updateSpaceName', managingSpace.value, trimmedDraftName.value)
+  closeSpaceModal()
+}
+
+function deleteManagedSpace() {
+  if (!managingSpace.value || modalBusy.value) return
+
+  emit('deleteSpace', managingSpace.value)
+  closeSpaceModal()
 }
 </script>
 
@@ -241,6 +366,135 @@ function confirmDelete(space: ExistingSpaceOption) {
 
 .secondary-button:disabled {
   color: var(--text-placeholder);
+  cursor: not-allowed;
+}
+
+.space-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.35);
+}
+
+.space-modal {
+  width: min(460px, 100%);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  box-shadow: var(--shadow-lg);
+  color: var(--text-primary);
+  padding: 18px;
+}
+
+.space-modal-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.space-modal-kicker {
+  margin: 0 0 4px;
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+}
+
+.space-modal-header h4 {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  line-height: 1.3;
+}
+
+.icon-button {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.field-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--text-secondary);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.space-name-input {
+  width: 100%;
+  height: 36px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-card);
+  color: var(--text-primary);
+  font: inherit;
+  padding: 0 10px;
+}
+
+.space-name-input:focus {
+  border-color: var(--primary-color);
+  outline: none;
+}
+
+.space-details {
+  display: grid;
+  gap: 10px;
+  margin: 16px 0;
+}
+
+.space-details div {
+  display: grid;
+  grid-template-columns: 110px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.space-details dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-xs);
+}
+
+.space-details dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--font-size-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.space-modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.primary-button {
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--primary-color);
+  color: #fff;
+  padding: 0 10px;
+  cursor: pointer;
+}
+
+.primary-button:disabled {
+  background: var(--text-placeholder);
   cursor: not-allowed;
 }
 </style>

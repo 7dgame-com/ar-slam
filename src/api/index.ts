@@ -289,6 +289,15 @@ export async function deleteSpaceRecord(spaceId: number): Promise<unknown> {
   return mainApi.delete(`/spaces/${encodeURIComponent(String(spaceId))}`).then((response) => response.data)
 }
 
+export async function updateSpaceRecord(
+  spaceId: number,
+  payload: Pick<CreateSpacePayload, 'name'>,
+): Promise<SpaceRecordResponse> {
+  return mainApi
+    .patch<SpaceRecordResponse>(`/spaces/${encodeURIComponent(String(spaceId))}`, payload)
+    .then((response) => response.data)
+}
+
 interface VerseSceneResponse {
   id: number | string
   name?: string
