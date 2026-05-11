@@ -21,6 +21,8 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 // @ts-ignore -- declarations are not available in the installed Three.js package.
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
+// @ts-ignore -- declarations are not available in the installed Three.js package.
+import { KTX2Loader } from 'three/examples/jsm/loaders/KTX2Loader.js'
 
 const props = defineProps<{
   modelUrl: string | null
@@ -57,6 +59,7 @@ let renderer: any = null
 let scene: any = null
 let camera: any = null
 let controls: any = null
+let ktx2Loader: any = null
 let resizeObserver: ResizeObserver | null = null
 let animationFrame = 0
 let currentModel: PreviewObject | null = null
@@ -212,6 +215,18 @@ function fitCameraToObject(object: PreviewObject) {
   controls.update()
 }
 
+function getKtx2Loader() {
+  if (!renderer) return null
+
+  if (!ktx2Loader) {
+    ktx2Loader = new KTX2Loader()
+      .setTranscoderPath('/js/three.js/libs/basis/')
+      .detectSupport(renderer)
+  }
+
+  return ktx2Loader
+}
+
 async function loadModel(url: string | null) {
   const requestId = ++loadRequestId
   errorMessage.value = ''
@@ -223,6 +238,11 @@ async function loadModel(url: string | null) {
   if (!url || !scene) return
 
   const loader = new GLTFLoader()
+  const nextKtx2Loader = getKtx2Loader()
+  if (nextKtx2Loader) {
+    loader.setKTX2Loader(nextKtx2Loader)
+  }
+
   loader.load(
     url,
     (gltf: { scene: PreviewObject }) => {
@@ -264,12 +284,14 @@ onBeforeUnmount(() => {
   }
   clearModel()
   controls?.dispose()
+  ktx2Loader?.dispose?.()
   renderer?.dispose()
   renderer?.domElement.remove()
   renderer = null
   scene = null
   camera = null
   controls = null
+  ktx2Loader = null
 })
 </script>
 

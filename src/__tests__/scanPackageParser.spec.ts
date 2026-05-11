@@ -1,4 +1,6 @@
 import JSZip from 'jszip'
+import { readFile } from 'node:fs/promises'
+import { URL as NodeURL } from 'node:url'
 import SparkMD5 from 'spark-md5'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseScanPackage } from '../domain/scanPackageParser'
@@ -27,6 +29,11 @@ async function zipEntries(file: File): Promise<string[]> {
   return Object.values(zip.files)
     .filter((entry) => !entry.dir)
     .map((entry) => entry.name)
+}
+
+async function actualAreaTargetPipelineFile(): Promise<File> {
+  const bytes = await readFile(new NodeURL('./fixtures/uv_unwrap_fixed.zip', import.meta.url))
+  return new File([new Uint8Array(bytes)], 'uv_unwrap_fixed.zip', { type: 'application/zip' })
 }
 
 describe('scanPackageParser', () => {
@@ -156,6 +163,53 @@ describe('scanPackageParser', () => {
       bounds: { min: [0, 0, 0], max: [1, 2, 3] },
       rawKeys: ['version', 'keyframeCount', 'bounds'],
     })
+  })
+
+  it('parses the real Area Target Scanner pipeline artifact with optimized.glb', async () => {
+    const file = await actualAreaTargetPipelineFile()
+
+    const result = await parseScanPackage(file, 'auto')
+    const cleanZipFile = (result as typeof result & { cleanZipFile?: File }).cleanZipFile
+
+    expect(result.provider).toBe('area-target-scanner')
+    expect(result.modelFile).toMatchObject({
+      path: 'optimized.glb',
+      name: 'optimized.glb',
+      role: 'model',
+    })
+    expect(result.localizationFiles.map((item) => item.name)).toEqual(['features.db'])
+    expect(result.manifestSummary).toEqual({
+      version: '2.0',
+      keyframeCount: 18,
+      bounds: {
+        min: [-3.1450719833374023, -1.0003403425216675, -3.1026859283447266],
+        max: [0.3891546428203583, 1.9519104957580566, 1.3868417739868164],
+      },
+      rawKeys: [
+        'version',
+        'meshFile',
+        'featureDbFile',
+        'bounds',
+        'keyframeCount',
+        'featureType',
+        'format',
+        'optimizedWith',
+        'createdAt',
+      ],
+    })
+    expect(result.files.map((item) => item.path)).toEqual([
+      'optimized.glb',
+      'manifest.json',
+      'features.db',
+    ])
+    expect(result.errors).toEqual([])
+    expect(result.zipMd5).not.toBe(await fileMd5(file))
+    expect(cleanZipFile).toBeInstanceOf(File)
+    await expect(zipEntries(cleanZipFile as File)).resolves.toEqual([
+      'optimized.glb',
+      'manifest.json',
+      'features.db',
+    ])
   })
 
   it('rejects non-zip files', async () => {

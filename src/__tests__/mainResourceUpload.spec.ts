@@ -1,7 +1,10 @@
 import JSZip from 'jszip'
+import { readFile } from 'node:fs/promises'
+import { URL as NodeURL } from 'node:url'
 import SparkMD5 from 'spark-md5'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mainApi } from '../api'
+import { parseScanPackage } from '../domain/scanPackageParser'
 import type { ParsedScanPackage } from '../domain/scanTypes'
 import { uploadScanPackageToMain } from '../services/mainResourceUpload'
 
@@ -58,6 +61,11 @@ async function zipEntries(blob: Blob): Promise<string[]> {
     .map((entry) => entry.name)
 }
 
+async function actualAreaTargetPipelineFile(): Promise<File> {
+  const bytes = await readFile(new NodeURL('./fixtures/uv_unwrap_fixed.zip', import.meta.url))
+  return new File([new Uint8Array(bytes)], 'uv_unwrap_fixed.zip', { type: 'application/zip' })
+}
+
 function parsedPackage(overrides: Partial<ParsedScanPackage> = {}): ParsedScanPackage {
   const modelFile = {
     path: 'room/model.glb',
@@ -100,6 +108,7 @@ describe('main resource upload service', () => {
     cosMock.instance.uploadFile.mockClear()
     cosMock.uploadCalls.length = 0
     cosMock.existingKeys.clear()
+    vi.unstubAllGlobals()
   })
 
   it('uploads only mesh.glb, file.zip, and image.png under the content-addressed space directory', async () => {
@@ -239,6 +248,161 @@ describe('main resource upload service', () => {
       modelFileId: 11,
       thumbnailFileId: 13,
       localizationFileIds: [12],
+    })
+  })
+
+  it('uploads the real Area Target Scanner pipeline artifact into an area-target-scanner space', async () => {
+    vi.stubGlobal('URL', {
+      createObjectURL: vi.fn(() => 'blob:area-target-model'),
+      revokeObjectURL: vi.fn(),
+    })
+    const sourceFile = await actualAreaTargetPipelineFile()
+    const parsed = await parseScanPackage(sourceFile, 'auto')
+    const filePayloads: Array<Record<string, unknown>> = []
+    const spacePayloads: Array<Record<string, unknown>> = []
+    const nextFileIds = [31, 32, 33]
+
+    mainApi.defaults.adapter = async (config) => {
+      if (config.method === 'get' && config.url === '/tencent-cloud/cloud') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: { public: { bucket: 'public-bucket-1250000000', region: 'ap-guangzhou' } },
+          headers: {},
+          config,
+        }
+      }
+
+      if (config.method === 'get' && config.url === '/tencent-cloud/public-token') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: {
+            Credentials: {
+              TmpSecretId: 'tmp-id',
+              TmpSecretKey: 'tmp-key',
+              Token: 'tmp-token',
+            },
+          },
+          headers: {},
+          config,
+        }
+      }
+
+      if (config.method === 'post' && config.url === '/files') {
+        const payload = JSON.parse(String(config.data))
+        filePayloads.push(payload)
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: { id: nextFileIds[filePayloads.length - 1] },
+          headers: {},
+          config,
+        }
+      }
+
+      if (config.method === 'post' && config.url === '/spaces') {
+        const payload = JSON.parse(String(config.data))
+        spacePayloads.push(payload)
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: { id: 801, name: payload.name, ...payload },
+          headers: {},
+          config,
+        }
+      }
+
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }
+
+    const result = await uploadScanPackageToMain({
+      sourceFile,
+      parsedPackage: parsed,
+      thumbnailBlob: new Blob(['thumb'], { type: 'image/png' }),
+    })
+
+    expect(parsed.provider).toBe('area-target-scanner')
+    expect(parsed.modelFile?.name).toBe('optimized.glb')
+    expect(cosMock.uploadCalls.map((item) => item.Key)).toEqual([
+      `spaces/${parsed.zipMd5}/mesh.glb`,
+      `spaces/${parsed.zipMd5}/file.zip`,
+      `spaces/${parsed.zipMd5}/image.png`,
+    ])
+    await expect(zipEntries(cosMock.uploadCalls[1].Body)).resolves.toEqual([
+      'manifest.json',
+      'features.db',
+    ])
+    expect(filePayloads.map((item) => item.filename)).toEqual([
+      'mesh.glb',
+      'file.zip',
+      'image.png',
+    ])
+    expect(spacePayloads).toHaveLength(1)
+    expect(spacePayloads[0]).toMatchObject({
+      name: 'uv_unwrap_fixed.zip',
+      mesh_id: 31,
+      file_id: 32,
+      image_id: 33,
+    })
+    const spaceData = spacePayloads[0].data as Record<string, unknown>
+    expect(spaceData).toMatchObject({
+      source: 'ar-slam-localization',
+      provider: 'area-target-scanner',
+      zipMd5: parsed.zipMd5,
+      zipName: 'uv_unwrap_fixed.zip',
+      cosPrefix: `spaces/${parsed.zipMd5}`,
+      primaryLocalizationFileId: 32,
+      modelFileId: 31,
+      thumbnailFileId: 33,
+      localizationFileIds: [32],
+      manifestSummary: {
+        version: '2.0',
+        keyframeCount: 18,
+      },
+    })
+    expect(spaceData.files).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        path: 'mesh.glb',
+        sourcePath: 'optimized.glb',
+        originalName: 'optimized.glb',
+        filename: 'mesh.glb',
+        role: 'model',
+        key: `spaces/${parsed.zipMd5}/mesh.glb`,
+      }),
+      expect.objectContaining({
+        path: 'file.zip',
+        filename: 'file.zip',
+        role: 'localization',
+        key: `spaces/${parsed.zipMd5}/file.zip`,
+        entries: [
+          expect.objectContaining({
+            path: 'manifest.json',
+            originalName: 'manifest.json',
+            role: 'manifest',
+          }),
+          expect.objectContaining({
+            path: 'features.db',
+            originalName: 'features.db',
+            role: 'localization',
+          }),
+        ],
+      }),
+      expect.objectContaining({
+        path: 'image.png',
+        filename: 'image.png',
+        role: 'support',
+        key: `spaces/${parsed.zipMd5}/image.png`,
+      }),
+    ]))
+    expect(result).toMatchObject({
+      spaceId: 801,
+      spaceName: 'uv_unwrap_fixed.zip',
+      zipMd5: parsed.zipMd5,
+      cosPrefix: `spaces/${parsed.zipMd5}`,
+      modelFileId: 31,
+      thumbnailFileId: 33,
+      localizationFileIds: [32],
     })
   })
 
