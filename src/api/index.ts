@@ -202,10 +202,12 @@ export function verifyCurrentToken(): Promise<{ data: VerifyTokenResponse }> {
 
 export interface MainCloudPublicConfig {
   bucket: string
-  region: string
+  region?: string
+  baseUrl?: string
 }
 
 export interface MainCloudConfigResponse {
+  driver?: string
   public?: MainCloudPublicConfig
   bucket?: string
   region?: string
@@ -275,6 +277,22 @@ export async function fetchCloudConfig(): Promise<MainCloudConfigResponse> {
 
 export async function fetchCosPublicToken(): Promise<CosPublicTokenResponse> {
   return mainApi.get<CosPublicTokenResponse>('/tencent-cloud/public-token').then((response) => response.data)
+}
+
+export interface LocalUploadResponse {
+  over: boolean
+  bucket: string
+  key: string
+  url?: string
+  filename: string
+  size: number
+  md5: string
+}
+
+export async function uploadLocalFile(data: FormData): Promise<LocalUploadResponse> {
+  return mainApi.post<LocalUploadResponse>('/upload/file', data, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  }).then((response) => response.data)
 }
 
 export async function createFileRecord(payload: CreateFileRecordPayload): Promise<FileRecordResponse> {

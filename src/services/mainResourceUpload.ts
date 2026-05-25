@@ -6,6 +6,7 @@ import {
   createSpaceRecord,
   fetchCloudConfig,
   fetchCosPublicToken,
+  uploadLocalFile,
   type CosPublicTokenResponse,
   type FileRecordResponse,
   type MainCloudConfigResponse,
@@ -33,10 +34,19 @@ export interface UploadScanPackageParams {
 }
 
 interface CosHandler {
+  driver: 'cos'
   cos: any
   bucket: string
   region: string
 }
+
+interface LocalHandler {
+  driver: 'local'
+  bucket: string
+  publicBaseUrl: string
+}
+
+type UploadHandler = CosHandler | LocalHandler
 
 interface UploadCandidate {
   path: string
@@ -95,6 +105,18 @@ function assertCloudConfig(config: MainCloudConfigResponse) {
   return { bucket, region }
 }
 
+function isLocalCloudConfig(config: MainCloudConfigResponse) {
+  return String(config.driver ?? '').toLowerCase() === 'local'
+}
+
+function resolveLocalHandler(config: MainCloudConfigResponse): LocalHandler {
+  return {
+    driver: 'local',
+    bucket: config.public?.bucket ?? config.bucket ?? 'store',
+    publicBaseUrl: (config.public?.baseUrl ?? '/storage').replace(/\/+$/, ''),
+  }
+}
+
 function assertToken(token: CosPublicTokenResponse) {
   const credentials = (token.Credentials ?? token.credentials ?? {}) as Record<string, string | undefined>
   const tmpSecretId = credentials?.TmpSecretId ?? credentials?.tmpSecretId
@@ -114,8 +136,13 @@ function assertToken(token: CosPublicTokenResponse) {
   }
 }
 
-async function createCosHandler(): Promise<CosHandler> {
-  const { bucket, region } = assertCloudConfig(await fetchCloudConfig())
+async function createUploadHandler(): Promise<UploadHandler> {
+  const cloudConfig = await fetchCloudConfig()
+  if (isLocalCloudConfig(cloudConfig)) {
+    return resolveLocalHandler(cloudConfig)
+  }
+
+  const { bucket, region } = assertCloudConfig(cloudConfig)
   const authorization = assertToken(await fetchCosPublicToken())
   const cos = new COS({
     getAuthorization(_options, callback) {
@@ -123,7 +150,7 @@ async function createCosHandler(): Promise<CosHandler> {
     },
   })
 
-  return { cos, bucket, region }
+  return { driver: 'cos', cos, bucket, region }
 }
 
 function safePathPart(value: string): string {
@@ -160,6 +187,14 @@ function objectUrl(bucket: string, region: string, key: string, location?: strin
   return `https://${bucket}.cos.${region}.myqcloud.com/${encodedKey}`
 }
 
+function localObjectUrl(handler: LocalHandler, key: string) {
+  const encodedKey = key
+    .split('/')
+    .map((part) => encodeURIComponent(part))
+    .join('/')
+  return `${handler.publicBaseUrl}/${encodeURIComponent(handler.bucket)}/${encodedKey}`
+}
+
 async function objectExists(handler: CosHandler, key: string): Promise<boolean> {
   return new Promise((resolve) => {
     handler.cos.headObject({
@@ -173,12 +208,34 @@ async function objectExists(handler: CosHandler, key: string): Promise<boolean> 
 }
 
 async function uploadObject(
-  handler: CosHandler,
+  handler: UploadHandler,
   candidate: UploadCandidate,
   onProgress: UploadScanPackageParams['onProgress'],
   objectIndex: number,
   objectCount: number,
 ): Promise<string> {
+  if (handler.driver === 'local') {
+    const md5 = candidate.md5 ?? await blobMd5(candidate.blob)
+    const keyParts = candidate.key.split('/').filter(Boolean)
+    const filename = keyParts.pop() || candidate.filename
+    const directory = keyParts.join('/')
+    const formData = new FormData()
+
+    formData.append('file', candidate.blob, filename)
+    formData.append('filename', filename)
+    formData.append('md5', md5)
+    formData.append('skip', '0')
+    formData.append('block_size', String(candidate.blob.size))
+    formData.append('upload_size', String(candidate.blob.size))
+    formData.append('size', String(candidate.blob.size))
+    formData.append('directory', directory)
+    formData.append('bucket', handler.bucket)
+
+    const upload = await uploadLocalFile(formData)
+    emitProgress(onProgress, `Uploading ${candidate.path}`, ((objectIndex + 1) / objectCount) * 82)
+    return upload.url || localObjectUrl(handler, candidate.key)
+  }
+
   const exists = await objectExists(handler, candidate.key)
   if (exists) {
     return objectUrl(handler.bucket, handler.region, candidate.key)
@@ -316,7 +373,7 @@ async function buildFileZipCandidate(
 }
 
 async function createUploadedFileRecord(
-  handler: CosHandler,
+  handler: UploadHandler,
   candidate: UploadCandidate,
   url: string,
 ): Promise<UploadedFileMapping> {
@@ -338,7 +395,9 @@ async function createUploadedFileRecord(
     role: candidate.role,
     fileId: responseId(record),
     key: candidate.key,
-    url: url || objectUrl(handler.bucket, handler.region, candidate.key),
+    url: url || (handler.driver === 'local'
+      ? localObjectUrl(handler, candidate.key)
+      : objectUrl(handler.bucket, handler.region, candidate.key)),
     md5,
     size: candidate.blob.size,
     entries: candidate.entries,
@@ -365,7 +424,7 @@ export async function uploadScanPackageToMain({
   const zipMd5 = parsedPackage.zipMd5
   const cosPrefix = `spaces/${zipMd5}`
   emitProgress(onProgress, 'Preparing upload', 1)
-  const handler = await createCosHandler()
+  const handler = await createUploadHandler()
   const zip = await JSZip.loadAsync(uploadSourceFile)
   const meshCandidate = await buildMeshCandidate(zip, parsedPackage, cosPrefix)
   const fileZipCandidate = await buildFileZipCandidate(zip, parsedPackage, cosPrefix)
