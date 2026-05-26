@@ -122,6 +122,16 @@ describe('main resource upload service', () => {
     const nextFileIds = [11, 12, 13]
 
     mainApi.defaults.adapter = async (config) => {
+      if (config.method === 'get' && config.url === '/system/deployment') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: { deploymentMode: 'cloud', storageDriver: 'cos' },
+          headers: {},
+          config,
+        }
+      }
+
       if (config.method === 'get' && config.url === '/tencent-cloud/cloud') {
         return {
           status: 200,
@@ -251,6 +261,121 @@ describe('main resource upload service', () => {
     })
   })
 
+  it('uses the main backend local upload endpoint when deployment config is local', async () => {
+    const sourceFile = await zipFile('room.zip', {
+      'room/model.glb': new Uint8Array([1, 2, 3]),
+      'room/map.bytes': new Uint8Array([4, 5, 6]),
+    })
+    const zipMd5 = 'local-content-md5'
+    const localUploadFilenames: string[] = []
+    let nextFileId = 41
+
+    mainApi.defaults.adapter = async (config) => {
+      if (config.method === 'get' && config.url === '/system/deployment') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: {
+            deploymentMode: 'local',
+            storageDriver: 'local',
+            storage: { publicBucket: 'store', publicBaseUrl: '/storage' },
+          },
+          headers: {},
+          config,
+        }
+      }
+
+      if (config.method === 'post' && config.url === '/upload/file') {
+        const formData = config.data as FormData
+        const filename = String(formData.get('filename'))
+        const directory = String(formData.get('directory'))
+        const key = `${directory}/${filename}`
+        localUploadFilenames.push(filename)
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: {
+            over: true,
+            bucket: 'store',
+            key,
+            url: `/storage/store/${key}`,
+            filename,
+            size: Number(formData.get('size')),
+            md5: String(formData.get('md5')),
+          },
+          headers: {},
+          config,
+        }
+      }
+
+      if (config.method === 'post' && config.url === '/files') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: { id: nextFileId++ },
+          headers: {},
+          config,
+        }
+      }
+
+      if (config.method === 'post' && config.url === '/spaces') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: { id: 901, name: 'room.zip' },
+          headers: {},
+          config,
+        }
+      }
+
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }
+
+    const result = await uploadScanPackageToMain({
+      sourceFile,
+      parsedPackage: parsedPackage({
+        id: zipMd5,
+        zipMd5,
+      }),
+      thumbnailBlob: new Blob(['thumb'], { type: 'image/png' }),
+    })
+
+    expect(localUploadFilenames).toEqual(['mesh.glb', 'file.zip', 'image.png'])
+    expect(cosMock.constructor).not.toHaveBeenCalled()
+    expect(cosMock.uploadCalls).toHaveLength(0)
+    expect(result).toMatchObject({
+      spaceId: 901,
+      zipMd5,
+      modelFileId: 41,
+      thumbnailFileId: 43,
+      localizationFileIds: [42],
+    })
+  })
+
+  it('stops before COS token requests when deployment config cannot be loaded', async () => {
+    const sourceFile = await zipFile('room.zip', {
+      'room/model.glb': new Uint8Array([1, 2, 3]),
+      'room/map.bytes': new Uint8Array([4, 5, 6]),
+    })
+
+    mainApi.defaults.adapter = async (config) => {
+      if (config.method === 'get' && config.url === '/system/deployment') {
+        throw new Error('deployment unavailable')
+      }
+
+      throw new Error(`Unexpected request ${config.method} ${config.url}`)
+    }
+
+    await expect(uploadScanPackageToMain({
+      sourceFile,
+      parsedPackage: parsedPackage(),
+      thumbnailBlob: new Blob(['thumb'], { type: 'image/png' }),
+    })).rejects.toThrow('deployment unavailable')
+
+    expect(cosMock.constructor).not.toHaveBeenCalled()
+    expect(cosMock.uploadCalls).toHaveLength(0)
+  })
+
   it('uploads the real Area Target Scanner pipeline artifact into an area-target-scanner space', async () => {
     vi.stubGlobal('URL', {
       createObjectURL: vi.fn(() => 'blob:area-target-model'),
@@ -263,6 +388,16 @@ describe('main resource upload service', () => {
     const nextFileIds = [31, 32, 33]
 
     mainApi.defaults.adapter = async (config) => {
+      if (config.method === 'get' && config.url === '/system/deployment') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: { deploymentMode: 'cloud', storageDriver: 'cos' },
+          headers: {},
+          config,
+        }
+      }
+
       if (config.method === 'get' && config.url === '/tencent-cloud/cloud') {
         return {
           status: 200,
@@ -416,6 +551,16 @@ describe('main resource upload service', () => {
     cosMock.existingKeys.add(`spaces/${zipMd5}/file.zip`)
 
     mainApi.defaults.adapter = async (config) => {
+      if (config.method === 'get' && config.url === '/system/deployment') {
+        return {
+          status: 200,
+          statusText: 'OK',
+          data: { deploymentMode: 'cloud', storageDriver: 'cos' },
+          headers: {},
+          config,
+        }
+      }
+
       if (config.method === 'get' && config.url === '/tencent-cloud/cloud') {
         return {
           status: 200,

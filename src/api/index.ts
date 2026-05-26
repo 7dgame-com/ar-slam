@@ -213,6 +213,18 @@ export interface MainCloudConfigResponse {
   region?: string
 }
 
+export interface MainDeploymentConfigResponse {
+  deploymentMode?: string
+  storageDriver?: string
+  storage?: {
+    publicBaseUrl?: string
+    publicBucket?: string
+    privateBucket?: string
+    tempBucket?: string
+  }
+  features?: Record<string, boolean | undefined>
+}
+
 export interface CosPublicTokenResponse {
   Credentials?: {
     TmpSecretId: string
@@ -273,6 +285,10 @@ export interface SpaceRecordResponse {
 
 export async function fetchCloudConfig(): Promise<MainCloudConfigResponse> {
   return mainApi.get<MainCloudConfigResponse>('/tencent-cloud/cloud').then((response) => response.data)
+}
+
+export async function fetchDeploymentConfig(): Promise<MainDeploymentConfigResponse> {
+  return mainApi.get<MainDeploymentConfigResponse>('/system/deployment').then((response) => response.data)
 }
 
 export async function fetchCosPublicToken(): Promise<CosPublicTokenResponse> {

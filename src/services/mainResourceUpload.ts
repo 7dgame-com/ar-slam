@@ -6,10 +6,12 @@ import {
   createSpaceRecord,
   fetchCloudConfig,
   fetchCosPublicToken,
+  fetchDeploymentConfig,
   uploadLocalFile,
   type CosPublicTokenResponse,
   type FileRecordResponse,
   type MainCloudConfigResponse,
+  type MainDeploymentConfigResponse,
 } from '../api'
 import type {
   ParsedScanPackage,
@@ -117,6 +119,17 @@ function resolveLocalHandler(config: MainCloudConfigResponse): LocalHandler {
   }
 }
 
+function deploymentToCloudConfig(config: MainDeploymentConfigResponse): MainCloudConfigResponse {
+  const mode = String(config.deploymentMode ?? '').toLowerCase()
+  return {
+    driver: config.storageDriver ?? (mode === 'local' || mode === 'private' ? 'local' : 'cos'),
+    public: {
+      bucket: config.storage?.publicBucket ?? 'store',
+      baseUrl: config.storage?.publicBaseUrl ?? '/storage',
+    },
+  }
+}
+
 function assertToken(token: CosPublicTokenResponse) {
   const credentials = (token.Credentials ?? token.credentials ?? {}) as Record<string, string | undefined>
   const tmpSecretId = credentials?.TmpSecretId ?? credentials?.tmpSecretId
@@ -137,11 +150,13 @@ function assertToken(token: CosPublicTokenResponse) {
 }
 
 async function createUploadHandler(): Promise<UploadHandler> {
-  const cloudConfig = await fetchCloudConfig()
-  if (isLocalCloudConfig(cloudConfig)) {
-    return resolveLocalHandler(cloudConfig)
+  const deploymentConfig = await fetchDeploymentConfig()
+  const deploymentCloudConfig = deploymentToCloudConfig(deploymentConfig)
+  if (isLocalCloudConfig(deploymentCloudConfig)) {
+    return resolveLocalHandler(deploymentCloudConfig)
   }
 
+  const cloudConfig = await fetchCloudConfig()
   const { bucket, region } = assertCloudConfig(cloudConfig)
   const authorization = assertToken(await fetchCosPublicToken())
   const cos = new COS({
